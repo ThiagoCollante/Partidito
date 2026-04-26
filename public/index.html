@@ -157,8 +157,19 @@
         socket.on('sync-state', (data) => {
             remotePlayersData = data.players;
             
-            // Removed the bugged host-override. Physics authority handles this naturally now!
-            networkBall = data.ball;
+            if (!hasPossession && !isKicking) {
+                // CRITICAL FIX: If the ball is free, absorb the Host's velocity so our local simulation predicts the exact same 60fps arc!
+                if (data.ball.possessor === null) {
+                    if (networkBall.possessor !== null || 
+                        Math.abs(networkBall.vx - data.ball.vx) > 0.05 || 
+                        Math.abs(networkBall.vy - data.ball.vy) > 0.05 ||
+                        Math.abs(networkBall.vz - data.ball.vz) > 0.05) {
+                        
+                        ballVelocity.set(data.ball.vx, data.ball.vy, data.ball.vz);
+                    }
+                }
+                networkBall = data.ball;
+            }
         });
 
         // 3. Main Game Setup
@@ -838,8 +849,8 @@
                             ball.rotation.x += (ball.position.z - prevZ) * 2; ball.rotation.z -= (ball.position.x - prevX) * 2;
                         }
                     }
-                } else if (isKicking || (isHost && networkBall.possessor === null)) {
-                    // FREE FLY PHYSICS (You simulate gravity/curve because you have Authority or you are the Host)
+                } else if (isKicking || networkBall.possessor === null) {
+                    // FREE FLY PHYSICS (Everyone simulates this locally so it renders at a buttery smooth 60fps instead of 20hz network ticks!)
                     ballVelocity.y -= 0.015; // Gravity
                     
                     if (currentCurve !== 0 && ballVelocity.lengthSq() > 0.01) {
@@ -873,11 +884,26 @@
                     // Keep ball in bounds
                     if (ball.position.x > 79 || ball.position.x < -79) { ballVelocity.x *= -1; ball.position.x = Math.sign(ball.position.x) * 79; }
                     if (ball.position.z > 39 || ball.position.z < -39) { ballVelocity.z *= -1; ball.position.z = Math.sign(ball.position.z) * 39; }
+
+                    // NETWORK CORRECTION (If we are a client, gently pull the ball towards the Host's true position to hide drift)
+                    if (!isHost && !isKicking) {
+                        const netPos = new THREE.Vector3(networkBall.x, networkBall.y, networkBall.z);
+                        const dist = ball.position.distanceTo(netPos);
+                        
+                        if (dist > 1.5) {
+                            // Hard snap if wildly out of sync (e.g., someone hit it and we lagged)
+                            ball.position.copy(netPos);
+                        } else if (dist > 0.1) {
+                            // Soft lerp correction to perfectly hide the 50ms network tick rate!
+                            ball.position.lerp(netPos, 4 * delta);
+                        }
+                    }
                 } else {
-                    // OBSERVER (Network Lerp: Someone else has authority, so just copy the network ball)
+                    // OBSERVER (Network Lerp: Someone else has possession)
                     ball.position.lerp(new THREE.Vector3(networkBall.x, networkBall.y, networkBall.z), 15 * delta);
                     ballVelocity.set(networkBall.vx, networkBall.vy, networkBall.vz); 
-                    if (ball.position.y <= 0.45) { ball.rotation.x += networkBall.vz; ball.rotation.z -= networkBall.vx; }
+                    const dx = networkBall.x - ball.position.x; const dz = networkBall.z - ball.position.z;
+                    if (ball.position.y <= 0.45) { ball.rotation.x += dz*2; ball.rotation.z -= dx*2; }
                 }
 
                 // Update Power UI

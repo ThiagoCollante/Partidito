@@ -157,11 +157,7 @@
         socket.on('sync-state', (data) => {
             remotePlayersData = data.players;
             
-            // Sync Ball State
-            // If the host just got an update where a client kicked it, absorb the velocity
-            if (isHost && networkBall.possessor !== null && data.ball.possessor === null) {
-                ballVelocity.set(data.ball.vx, data.ball.vy, data.ball.vz);
-            }
+            // Removed the bugged host-override. Physics authority handles this naturally now!
             networkBall = data.ball;
         });
 
@@ -316,6 +312,10 @@
             let chargeAmount = 0;
             let kickCanceled = false; 
 
+            // NEW: Temporary Multiplayer Physics Authority
+            let isKicking = false;
+            let kickAuthorityTimer = 0;
+
             let currentCurve = 0; 
             let curveTimer = 0; 
             let isKnuckleball = false;
@@ -460,6 +460,16 @@
             const staminaBar = document.getElementById('stamina-bar');
 
             // --- NETWORK TRANSMIT LOOP ---
+            function emitBallState() {
+                if (!userId || !currentRoom) return;
+                socket.emit('ball-update', {
+                    roomCode: currentRoom,
+                    x: ball.position.x, y: ball.position.y, z: ball.position.z,
+                    vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z,
+                    possessor: (hasPossession || isKicking) ? userId : null // Hold network authority if kicking!
+                });
+            }
+
             setInterval(() => {
                 if (!userId || !currentRoom) return;
 
@@ -470,14 +480,9 @@
                     rotX: playerGroup.rotation.x, rotY: playerGroup.rotation.y
                 });
 
-                // Sync Ball (Only if local player has possession, OR host dictates empty physics)
-                if (hasPossession || (isHost && networkBall.possessor === null)) {
-                    socket.emit('ball-update', {
-                        roomCode: currentRoom,
-                        x: ball.position.x, y: ball.position.y, z: ball.position.z,
-                        vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z,
-                        possessor: hasPossession ? userId : null
-                    });
+                // Sync Ball (If possessed, recently kicked, or acting as neutral host)
+                if (hasPossession || isKicking || (isHost && networkBall.possessor === null)) {
+                    emitBallState();
                 }
             }, 50); // 20 updates per second
 
@@ -665,49 +670,187 @@
                         isKnuckleball = false;
                         upArrowHoldDuration = -9999; 
                         
-                        // Emit possession drop
-                        socket.emit('ball-update', { roomCode: currentRoom, x: ball.position.x, y: ball.position.y, z: ball.position.z, vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z, possessor: null });
+                        isKicking = true;
+                        kickAuthorityTimer = 0.5; // Seize physics authority!
+                        emitBallState();
                     }
                 } else if (!keys.arrowup) {
                     upArrowHoldDuration = 0; 
                 }
 
-                // 2. MULTIPLAYER BALL LOGIC
+                // 2. HITBOX & INTERACTIONS (Gain Possession or Volley)
+                let pCenter = playerGroup.position.clone();
+                if (isJumping && jumpType === 'withoutBall') pCenter.y += 1.2; 
+                else if (isJumping && jumpType === 'dive') { pCenter.x += Math.sin(activeDribbleAngle); pCenter.z += Math.cos(activeDribbleAngle); pCenter.y += 0.5; }
                 
-                // If local player doesn't have possession, and network says remote player does -> Lerp ball to remote
-                if (!hasPossession && networkBall.possessor !== null && networkBall.possessor !== userId) {
-                    ball.position.lerp(new THREE.Vector3(networkBall.x, networkBall.y, networkBall.z), 15 * delta);
-                    const dx = networkBall.x - ball.position.x; 
-                    const dz = networkBall.z - ball.position.z;
-                    if (ball.position.y <= 0.45) { 
-                        ball.rotation.x += dz*2; 
-                        ball.rotation.z -= dx*2; 
+                const distToBall = pCenter.distanceTo(ball.position);
+                const collisionDist = (isJumping && (jumpType === 'withoutBall' || jumpType === 'dive')) ? 1.5 : 1.2; 
+
+                if (!hasPossession && !isRecovering && distToBall < collisionDist && possessionCooldown <= 0) {
+                    if (isChargingVolley) {
+                        // INSTANT VOLLEY KICK!
+                        const isLob = keys.arrowup;
+                        isKnuckleball = keys.arrowleft && keys.arrowright;
+                        let curveDir = 0;
+                        if (!isKnuckleball) { if (keys.arrowleft) curveDir = 1; if (keys.arrowright) curveDir = -1; }
+
+                        const curveAngleOffset = curveDir * -0.75 * (0.5 + chargeAmount * 0.5);
+                        const initialShotAngle = activeDribbleAngle + curveAngleOffset;
+
+                        if (!isLob) {
+                            const ks = 0.35 + (chargeAmount * 0.9);
+                            ballVelocity.set(Math.sin(initialShotAngle)*ks, 0.22 + (0.15*chargeAmount), Math.cos(initialShotAngle)*ks);
+                        } else {
+                            const lsX = 0.25 + (chargeAmount * 0.5);
+                            ballVelocity.set(Math.sin(initialShotAngle)*lsX, 0.35 + (chargeAmount*0.35), Math.cos(initialShotAngle)*lsX);
+                        }
+                        
+                        if (curveDir !== 0) {
+                            currentCurve = curveDir * 0.018 * (chargeAmount + 0.5); 
+                            lateralCurveVector.set(Math.cos(initialShotAngle), 0, -Math.sin(initialShotAngle));
+                            curveTimer = 0.6 + (chargeAmount * 0.8);
+                        } else { currentCurve = 0; curveTimer = 0; }
+                        
+                        possessionCooldown = 0.5; isChargingVolley = false; chargeAmount = 0; knuckleTimer = 0; kickCanceled = true; 
+                        isKicking = true; kickAuthorityTimer = 0.5;
+                        emitBallState();
+                    } else if (isJumping && jumpType === 'dive') {
+                        // DIVE HEADER HIT!
+                        ballVelocity.set(Math.sin(activeDribbleAngle)*0.5 + jumpVelocityX*delta, 0.25, Math.cos(activeDribbleAngle)*0.5 + jumpVelocityZ*delta);
+                        possessionCooldown = 0.8; currentCurve = 0; curveTimer = 0; isKnuckleball = false;
+                        isKicking = true; kickAuthorityTimer = 0.5;
+                        emitBallState();
+                    } else if (isJumping && jumpType === 'withoutBall') {
+                        if (intentToTrap) {
+                            hasPossession = true; jumpType = 'withBall'; 
+                        } else {
+                            // Header Hit
+                            ballVelocity.set(jumpVelocityX*delta*1.6 + Math.sin(activeDribbleAngle)*0.2, 0.30, jumpVelocityZ*delta*1.6 + Math.cos(activeDribbleAngle)*0.2);
+                            possessionCooldown = 0.4; currentCurve = 0; curveTimer = 0; isKnuckleball = false;
+                            isKicking = true; kickAuthorityTimer = 0.5;
+                            emitBallState();
+                        }
+                    } else {
+                        hasPossession = true; // Regular walk-over possession
                     }
-                } 
-                // Host computes neutral physics if no one possesses it
-                else if (!hasPossession && (isHost && networkBall.possessor === null)) {
+                }
+
+                // 3. KICK AUTHORITY TIMERS
+                if (isKicking) {
+                    kickAuthorityTimer -= delta;
+                    if (kickAuthorityTimer <= 0) {
+                        isKicking = false;
+                        emitBallState(); // Tell network we relinquish control to the Host
+                    }
+                }
+
+                // 4. BALL PHYSICS UPDATE
+                if (hasPossession) {
+                    if (distToBall > 6.0) {
+                        hasPossession = false; isCharging = false; chargeAmount = 0; rainbowFlickState = 0;
+                        emitBallState(); // Lost ball
+                    } else if (rainbowFlickState === 1) {
+                        // Rainbow Flick Pullback
+                        rainbowFlickTimer -= delta;
+                        const targetX = playerGroup.position.x - Math.sin(activeDribbleAngle) * 1.2;
+                        const targetZ = playerGroup.position.z - Math.cos(activeDribbleAngle) * 1.2;
+                        const prevX = ball.position.x; const prevZ = ball.position.z;
+                        
+                        const lerpSpeed = 25 * delta;
+                        ball.position.x += (targetX - ball.position.x) * lerpSpeed;
+                        ball.position.z += (targetZ - ball.position.z) * lerpSpeed;
+                        ball.position.y = 0.4; ballVelocity.set(0, 0, 0); 
+
+                        ball.rotation.x += (ball.position.z - prevZ) * 2; ball.rotation.z -= (ball.position.x - prevX) * 2;
+
+                        if (rainbowFlickTimer <= 0) {
+                            // Rainbow Flick Pop
+                            hasPossession = false; possessionCooldown = 0.6; isCharging = false; chargeAmount = 0; rainbowFlickState = 0; 
+                            
+                            let ffs = 0.18; let fvs = 0.45; 
+                            if (isSprinting) { ffs=0.35; fvs=0.55; } else if (isMoving) { ffs=0.26; fvs=0.48; }
+                            
+                            ballVelocity.set(Math.sin(activeDribbleAngle)*ffs, fvs, Math.cos(activeDribbleAngle)*ffs);
+                            currentCurve = 0; curveTimer = 0; isKnuckleball = false;
+                            
+                            isKicking = true; kickAuthorityTimer = 0.5;
+                            emitBallState();
+                        }
+                    } else {
+                        // Standard Dribble & Shot Charge
+                        if (!isCharging && keys.space && !kickCanceled && !isRecovering) { isCharging = true; chargeAmount = 0; }
+
+                        if (isCharging) {
+                            if (keys.space) {
+                                chargeAmount += delta * 0.8; if (chargeAmount > 1) chargeAmount = 1;
+                            } else {
+                                // Execute Kick!
+                                hasPossession = false; possessionCooldown = 0.5; 
+
+                                const isLob = keys.arrowup; isKnuckleball = keys.arrowleft && keys.arrowright;
+                                let curveDir = 0; if (!isKnuckleball) { if (keys.arrowleft) curveDir = 1; if (keys.arrowright) curveDir = -1; }
+
+                                const curveAngleOffset = curveDir * -0.75 * (0.5 + chargeAmount * 0.5);
+                                const initialShotAngle = activeDribbleAngle + curveAngleOffset;
+
+                                if (!isLob) {
+                                    const ks = 0.3 + (chargeAmount * 0.9);
+                                    ballVelocity.set(Math.sin(initialShotAngle)*ks, 0.12 + (0.1*chargeAmount), Math.cos(initialShotAngle)*ks);
+                                } else {
+                                    const lsX = 0.2 + (chargeAmount * 0.5);
+                                    ballVelocity.set(Math.sin(initialShotAngle)*lsX, 0.2 + (chargeAmount*0.35), Math.cos(initialShotAngle)*lsX);
+                                }
+                                
+                                if (curveDir !== 0) {
+                                    currentCurve = curveDir * 0.018 * (chargeAmount + 0.5); 
+                                    lateralCurveVector.set(Math.cos(initialShotAngle), 0, -Math.sin(initialShotAngle));
+                                    curveTimer = 0.6 + (chargeAmount * 0.8);
+                                } else { currentCurve = 0; curveTimer = 0; }
+
+                                isCharging = false; chargeAmount = 0; knuckleTimer = 0; 
+                                isKicking = true; kickAuthorityTimer = 0.5;
+                                emitBallState();
+                            }
+                        }
+
+                        if (hasPossession) {
+                            if (!isCharging && isMoving && dribbleTimer <= 0) {
+                                if (isSprinting) { visualDribbleOffset = 3.0; dribbleTimer = 0.4; } 
+                                else { visualDribbleOffset = 1.2; dribbleTimer = 0.35; }
+                            }
+                            if (isCharging) visualDribbleOffset -= visualDribbleOffset * 10 * delta; 
+                            else if (isMoving) visualDribbleOffset -= visualDribbleOffset * 5 * delta; 
+                            if (visualDribbleOffset < 0) visualDribbleOffset = 0;
+
+                            const targetX = playerGroup.position.x + Math.sin(activeDribbleAngle) * (1.5 + visualDribbleOffset);
+                            const targetZ = playerGroup.position.z + Math.cos(activeDribbleAngle) * (1.5 + visualDribbleOffset);
+                            const prevX = ball.position.x; const prevZ = ball.position.z;
+
+                            if (Math.hypot(targetX - ball.position.x, targetZ - ball.position.z) > 0.15) {
+                                const lerpSpeed = 6 * delta;
+                                ball.position.x += (targetX - ball.position.x) * lerpSpeed;
+                                ball.position.z += (targetZ - ball.position.z) * lerpSpeed;
+                            } else { ball.position.x = targetX; ball.position.z = targetZ; }
+                            
+                            ball.position.y = 0.4 + playerGroup.position.y; ballVelocity.set(0, 0, 0); 
+                            currentCurve = 0; curveTimer = 0; isKnuckleball = false;
+
+                            ball.rotation.x += (ball.position.z - prevZ) * 2; ball.rotation.z -= (ball.position.x - prevX) * 2;
+                        }
+                    }
+                } else if (isKicking || (isHost && networkBall.possessor === null)) {
+                    // FREE FLY PHYSICS (You simulate gravity/curve because you have Authority or you are the Host)
                     ballVelocity.y -= 0.015; // Gravity
                     
-                    // Note: Host handles the curve locally for shots it takes, but network curves are simplified in this version
                     if (currentCurve !== 0 && ballVelocity.lengthSq() > 0.01) {
-                        if (curveTimer > 0) {
-                            ballVelocity.x += lateralCurveVector.x * currentCurve;
-                            ballVelocity.z += lateralCurveVector.z * currentCurve;
-                            curveTimer -= delta;
-                        } else {
-                            currentCurve = 0; 
-                        }
+                        if (curveTimer > 0) { ballVelocity.x += lateralCurveVector.x * currentCurve; ballVelocity.z += lateralCurveVector.z * currentCurve; curveTimer -= delta; } 
+                        else currentCurve = 0; 
                     }
                     if (isKnuckleball && ballVelocity.lengthSq() > 0.05) {
                         knuckleTimer += delta;
                         if (knuckleTimer > 0.03) { 
-                            ballVelocity.x += (Math.random() - 0.5) * 0.1;
-                            ballVelocity.y += (Math.random() - 0.5) * 0.06;
-                            ballVelocity.z += (Math.random() - 0.5) * 0.1;
-                            if (Math.random() > 0.8) {
-                                ballVelocity.x += (Math.random() - 0.5) * 0.2;
-                                ballVelocity.z += (Math.random() - 0.5) * 0.2;
-                            }
+                            ballVelocity.x += (Math.random() - 0.5) * 0.1; ballVelocity.y += (Math.random() - 0.5) * 0.06; ballVelocity.z += (Math.random() - 0.5) * 0.1;
+                            if (Math.random() > 0.8) { ballVelocity.x += (Math.random() - 0.5) * 0.2; ballVelocity.z += (Math.random() - 0.5) * 0.2; }
                             knuckleTimer = 0;
                         }
                     }
@@ -716,310 +859,25 @@
                     
                     // Ground Bounce
                     if (ball.position.y <= 0.4) {
-                        ball.position.y = 0.4;
-                        currentCurve *= 0.8; 
-                        curveTimer = 0; 
-                        isKnuckleball = false; 
-
-                        if (ballVelocity.y < -0.05) {
-                            ballVelocity.y *= -0.6; 
-                            ballVelocity.x *= 0.9;
-                            ballVelocity.z *= 0.9;
-                        } else {
-                            ballVelocity.y = 0;
-                            ballVelocity.x *= ballFriction;
-                            ballVelocity.z *= ballFriction;
-                        }
+                        ball.position.y = 0.4; currentCurve *= 0.8; curveTimer = 0; isKnuckleball = false; 
+                        if (ballVelocity.y < -0.05) { ballVelocity.y *= -0.6; ballVelocity.x *= 0.9; ballVelocity.z *= 0.9; } 
+                        else { ballVelocity.y = 0; ballVelocity.x *= ballFriction; ballVelocity.z *= ballFriction; }
                     } else {
-                        // Air Friction
-                        ballVelocity.x *= 0.99;
-                        ballVelocity.z *= 0.99;
+                        ballVelocity.x *= 0.99; ballVelocity.z *= 0.99; // Air friction
                     }
 
                     // Rolling rotation
-                    if (ball.position.y <= 0.45) {
-                        ball.rotation.x += ballVelocity.z;
-                        ball.rotation.z -= ballVelocity.x;
-                    }
-
-                    if (ball.position.y <= 0.4 && ballVelocity.length() < 0.01) {
-                        ballVelocity.set(0, 0, 0);
-                    }
+                    if (ball.position.y <= 0.45) { ball.rotation.x += ballVelocity.z; ball.rotation.z -= ballVelocity.x; }
+                    if (ball.position.y <= 0.4 && ballVelocity.length() < 0.01) ballVelocity.set(0, 0, 0);
 
                     // Keep ball in bounds
-                    if (ball.position.x > 79 || ball.position.x < -79) {
-                        ballVelocity.x *= -1;
-                        ball.position.x = Math.sign(ball.position.x) * 79;
-                    }
-                    if (ball.position.z > 39 || ball.position.z < -39) {
-                        ballVelocity.z *= -1;
-                        ball.position.z = Math.sign(ball.position.z) * 39;
-                    }
-                }
-                // Client (not host) smoothly syncs neutral ball
-                else if (!hasPossession && (!isHost && networkBall.possessor === null)) {
+                    if (ball.position.x > 79 || ball.position.x < -79) { ballVelocity.x *= -1; ball.position.x = Math.sign(ball.position.x) * 79; }
+                    if (ball.position.z > 39 || ball.position.z < -39) { ballVelocity.z *= -1; ball.position.z = Math.sign(ball.position.z) * 39; }
+                } else {
+                    // OBSERVER (Network Lerp: Someone else has authority, so just copy the network ball)
                     ball.position.lerp(new THREE.Vector3(networkBall.x, networkBall.y, networkBall.z), 15 * delta);
-                    ballVelocity.set(networkBall.vx, networkBall.vy, networkBall.vz); // Keep velocity synced for prediction
-                    if (ball.position.y <= 0.45) { 
-                        ball.rotation.x += networkBall.vz; 
-                        ball.rotation.z -= networkBall.vx; 
-                    }
-                }
-
-                // Hitbox & Interactions (Local player gaining possession)
-                let playerHitboxCenter = playerGroup.position.clone();
-                if (isJumping && jumpType === 'withoutBall') {
-                    playerHitboxCenter.y += 1.2; 
-                } else if (isJumping && jumpType === 'dive') {
-                    playerHitboxCenter.x += Math.sin(activeDribbleAngle) * 1.0;
-                    playerHitboxCenter.z += Math.cos(activeDribbleAngle) * 1.0;
-                    playerHitboxCenter.y += 0.5; 
-                }
-                
-                const distToBall = playerHitboxCenter.distanceTo(ball.position);
-                const collisionDist = (isJumping && (jumpType === 'withoutBall' || jumpType === 'dive')) ? 1.5 : 1.2; 
-
-                // Network Steal / Intercept override
-                // If local player touches it, steal possession forcefully
-                if (!hasPossession && !isRecovering && distToBall < collisionDist && possessionCooldown <= 0) {
-                    if (isChargingVolley) {
-                        // INSTANT VOLLEY KICK!
-                        const isLob = keys.arrowup;
-                        isKnuckleball = keys.arrowleft && keys.arrowright;
-                        
-                        let curveDir = 0;
-                        if (!isKnuckleball) {
-                            if (keys.arrowleft) curveDir = 1; 
-                            if (keys.arrowright) curveDir = -1; 
-                        }
-
-                        const curveAngleOffset = curveDir * -0.75 * (0.5 + chargeAmount * 0.5);
-                        const initialShotAngle = activeDribbleAngle + curveAngleOffset;
-
-                        if (!isLob) {
-                            const kickStrength = 0.35 + (chargeAmount * 0.9);
-                            ballVelocity.x = Math.sin(initialShotAngle) * kickStrength;
-                            ballVelocity.z = Math.cos(initialShotAngle) * kickStrength;
-                            ballVelocity.y = 0.22 + (0.15 * chargeAmount); 
-                        } else {
-                            const lobStrengthX = 0.25 + (chargeAmount * 0.5);
-                            const lobStrengthY = 0.35 + (chargeAmount * 0.35);
-                            ballVelocity.x = Math.sin(initialShotAngle) * lobStrengthX;
-                            ballVelocity.z = Math.cos(initialShotAngle) * lobStrengthX;
-                            ballVelocity.y = lobStrengthY;
-                        }
-                        
-                        if (curveDir !== 0) {
-                            currentCurve = curveDir * 0.018 * (chargeAmount + 0.5); 
-                            lateralCurveVector.set(Math.cos(initialShotAngle), 0, -Math.sin(initialShotAngle));
-                            curveTimer = 0.6 + (chargeAmount * 0.8);
-                        } else {
-                            currentCurve = 0;
-                            curveTimer = 0;
-                        }
-                        
-                        possessionCooldown = 0.5;
-                        isChargingVolley = false;
-                        chargeAmount = 0;
-                        knuckleTimer = 0;
-                        kickCanceled = true; 
-                        
-                        socket.emit('ball-update', { roomCode: currentRoom, x: ball.position.x, y: ball.position.y, z: ball.position.z, vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z, possessor: null });
-                    } else if (isJumping && jumpType === 'dive') {
-                        // DIVE HEADER HIT!
-                        const hitBoost = 0.5; 
-                        ballVelocity.x = Math.sin(activeDribbleAngle) * hitBoost + jumpVelocityX * delta;
-                        ballVelocity.z = Math.cos(activeDribbleAngle) * hitBoost + jumpVelocityZ * delta;
-                        ballVelocity.y = 0.25; 
-                        possessionCooldown = 0.8; 
-                        
-                        currentCurve = 0;
-                        curveTimer = 0;
-                        isKnuckleball = false;
-                        socket.emit('ball-update', { roomCode: currentRoom, x: ball.position.x, y: ball.position.y, z: ball.position.z, vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z, possessor: null });
-                    } else if (isJumping && jumpType === 'withoutBall') {
-                        if (intentToTrap) {
-                            // Mid-air Trap
-                            hasPossession = true;
-                            jumpType = 'withBall'; 
-                        } else {
-                            // Header / Volley Hit
-                            const playerSpeedXPerFrame = jumpVelocityX * delta;
-                            const playerSpeedZPerFrame = jumpVelocityZ * delta;
-                            const hitBoost = 0.20; 
-                            
-                            ballVelocity.x = playerSpeedXPerFrame * 1.6 + Math.sin(activeDribbleAngle) * hitBoost;
-                            ballVelocity.z = playerSpeedZPerFrame * 1.6 + Math.cos(activeDribbleAngle) * hitBoost;
-                            ballVelocity.y = 0.30; 
-                            possessionCooldown = 0.4; 
-                            
-                            currentCurve = 0;
-                            curveTimer = 0;
-                            isKnuckleball = false;
-                            socket.emit('ball-update', { roomCode: currentRoom, x: ball.position.x, y: ball.position.y, z: ball.position.z, vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z, possessor: null });
-                        }
-                    } else {
-                        // Ground possession
-                        hasPossession = true;
-                    }
-                }
-
-                // Local Tether Physics (When local player HAS possession)
-                if (hasPossession) {
-                    if (distToBall > 6.0) {
-                        hasPossession = false;
-                        isCharging = false;
-                        chargeAmount = 0;
-                        rainbowFlickState = 0;
-                        socket.emit('ball-update', { roomCode: currentRoom, x: ball.position.x, y: ball.position.y, z: ball.position.z, vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z, possessor: null });
-                    } else if (rainbowFlickState === 1) {
-                        // Rainbow Flick Pullback
-                        rainbowFlickTimer -= delta;
-                        const targetX = playerGroup.position.x - Math.sin(activeDribbleAngle) * 1.2;
-                        const targetZ = playerGroup.position.z - Math.cos(activeDribbleAngle) * 1.2;
-                        
-                        const prevX = ball.position.x;
-                        const prevZ = ball.position.z;
-                        
-                        const lerpSpeed = 25 * delta;
-                        ball.position.x += (targetX - ball.position.x) * lerpSpeed;
-                        ball.position.z += (targetZ - ball.position.z) * lerpSpeed;
-                        ball.position.y = 0.4; 
-                        ballVelocity.set(0, 0, 0); 
-
-                        ball.rotation.x += (ball.position.z - prevZ) * 2;
-                        ball.rotation.z -= (ball.position.x - prevX) * 2;
-
-                        if (rainbowFlickTimer <= 0) {
-                            // Rainbow Flick Pop
-                            hasPossession = false;
-                            possessionCooldown = 0.6; 
-                            isCharging = false;
-                            chargeAmount = 0;
-                            rainbowFlickState = 0; 
-                            
-                            let flickForwardStrength = 0.18; 
-                            let flickVerticalStrength = 0.45; 
-
-                            if (isSprinting) {
-                                flickForwardStrength = 0.35; 
-                                flickVerticalStrength = 0.55; 
-                            } else if (isMoving) {
-                                flickForwardStrength = 0.26; 
-                                flickVerticalStrength = 0.48; 
-                            }
-                            
-                            ballVelocity.x = Math.sin(activeDribbleAngle) * flickForwardStrength;
-                            ballVelocity.z = Math.cos(activeDribbleAngle) * flickForwardStrength;
-                            ballVelocity.y = flickVerticalStrength;
-                            
-                            currentCurve = 0;
-                            curveTimer = 0;
-                            isKnuckleball = false;
-                            socket.emit('ball-update', { roomCode: currentRoom, x: ball.position.x, y: ball.position.y, z: ball.position.z, vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z, possessor: null });
-                        }
-                    } else {
-                        // Standard Dribble & Shot Charge
-                        if (!isCharging && keys.space && !kickCanceled && !isRecovering) {
-                            isCharging = true;
-                            chargeAmount = 0;
-                        }
-
-                        if (isCharging) {
-                            if (keys.space) {
-                                chargeAmount += delta * 0.8; 
-                                if (chargeAmount > 1) chargeAmount = 1;
-                            } else {
-                                // Execute Kick!
-                                hasPossession = false;
-                                possessionCooldown = 0.5; 
-
-                                const isLob = keys.arrowup;
-                                isKnuckleball = keys.arrowleft && keys.arrowright;
-                                
-                                let curveDir = 0;
-                                if (!isKnuckleball) {
-                                    if (keys.arrowleft) curveDir = 1; 
-                                    if (keys.arrowright) curveDir = -1; 
-                                }
-
-                                const curveAngleOffset = curveDir * -0.75 * (0.5 + chargeAmount * 0.5);
-                                const initialShotAngle = activeDribbleAngle + curveAngleOffset;
-
-                                if (!isLob) {
-                                    const kickStrength = 0.3 + (chargeAmount * 0.9);
-                                    ballVelocity.x = Math.sin(initialShotAngle) * kickStrength;
-                                    ballVelocity.z = Math.cos(initialShotAngle) * kickStrength;
-                                    ballVelocity.y = 0.12 + (0.1 * chargeAmount); 
-                                } else {
-                                    const lobStrengthX = 0.2 + (chargeAmount * 0.5);
-                                    const lobStrengthY = 0.2 + (chargeAmount * 0.35);
-                                    ballVelocity.x = Math.sin(initialShotAngle) * lobStrengthX;
-                                    ballVelocity.z = Math.cos(initialShotAngle) * lobStrengthX;
-                                    ballVelocity.y = lobStrengthY;
-                                }
-                                
-                                if (curveDir !== 0) {
-                                    currentCurve = curveDir * 0.018 * (chargeAmount + 0.5); 
-                                    lateralCurveVector.set(Math.cos(initialShotAngle), 0, -Math.sin(initialShotAngle));
-                                    curveTimer = 0.6 + (chargeAmount * 0.8);
-                                } else {
-                                    currentCurve = 0;
-                                    curveTimer = 0;
-                                }
-
-                                isCharging = false;
-                                chargeAmount = 0;
-                                knuckleTimer = 0;
-                                socket.emit('ball-update', { roomCode: currentRoom, x: ball.position.x, y: ball.position.y, z: ball.position.z, vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z, possessor: null });
-                            }
-                        }
-
-                        if (hasPossession) {
-                            // Dribbling offset
-                            if (!isCharging && isMoving && dribbleTimer <= 0) {
-                                if (isSprinting) {
-                                    visualDribbleOffset = 3.0; 
-                                    dribbleTimer = 0.4; 
-                                } else {
-                                    visualDribbleOffset = 1.2; 
-                                    dribbleTimer = 0.35; 
-                                }
-                            }
-                            
-                            if (isCharging) {
-                                visualDribbleOffset -= visualDribbleOffset * 10 * delta; 
-                            } else if (isMoving) {
-                                visualDribbleOffset -= visualDribbleOffset * 5 * delta; 
-                            }
-                            
-                            if (visualDribbleOffset < 0) visualDribbleOffset = 0;
-
-                            const targetX = playerGroup.position.x + Math.sin(activeDribbleAngle) * (1.5 + visualDribbleOffset);
-                            const targetZ = playerGroup.position.z + Math.cos(activeDribbleAngle) * (1.5 + visualDribbleOffset);
-
-                            const prevX = ball.position.x;
-                            const prevZ = ball.position.z;
-
-                            if (Math.hypot(targetX - ball.position.x, targetZ - ball.position.z) > 0.15) {
-                                const lerpSpeed = 6 * delta;
-                                ball.position.x += (targetX - ball.position.x) * lerpSpeed;
-                                ball.position.z += (targetZ - ball.position.z) * lerpSpeed;
-                            } else {
-                                ball.position.x = targetX;
-                                ball.position.z = targetZ;
-                            }
-                            
-                            ball.position.y = 0.4 + playerGroup.position.y; 
-                            ballVelocity.set(0, 0, 0); 
-                            currentCurve = 0; 
-                            curveTimer = 0; 
-                            isKnuckleball = false;
-
-                            ball.rotation.x += (ball.position.z - prevZ) * 2;
-                            ball.rotation.z -= (ball.position.x - prevX) * 2;
-                        }
-                    }
+                    ballVelocity.set(networkBall.vx, networkBall.vy, networkBall.vz); 
+                    if (ball.position.y <= 0.45) { ball.rotation.x += networkBall.vz; ball.rotation.z -= networkBall.vx; }
                 }
 
                 // Update Power UI

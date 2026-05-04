@@ -2,979 +2,161 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FIFA-Style 3D Multiplayer</title>
-    <!-- Fixed Script Links -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <!-- WEBSOCKET CLIENT SCRIPT -->
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <style>
-        body { margin: 0; overflow: hidden; background-color: #87CEEB; }
-        canvas { display: block; }
-        .transition-opacity { transition: opacity 0.3s ease; }
-    </style>
+    <title>Juego Físicas Multiplayer</title>
+    <style>body { margin: 0; overflow: hidden; }</style>
 </head>
-<body class="antialiased">
-
-    <!-- Multiplayer Lobby UI -->
-    <div id="lobby-ui" class="absolute inset-0 bg-black/60 backdrop-blur-md z-40 flex items-center justify-center transition-opacity">
-        <div class="bg-gray-900 border border-white/20 p-8 rounded-2xl shadow-2xl w-[400px]">
-            <h1 class="text-3xl font-black text-white text-center tracking-tight mb-6">PRO SOCCER <span class="text-yellow-400">ONLINE</span></h1>
-            
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-white/70 text-xs font-bold uppercase tracking-wider mb-1">Your Nickname</label>
-                    <input type="text" id="nickname-input" class="w-full bg-white/10 border border-white/20 rounded-lg p-3 text-white font-bold outline-none focus:border-yellow-400 focus:bg-white/20 transition-all" placeholder="Enter name..." value="Player" maxlength="12">
-                </div>
-                
-                <hr class="border-white/10 my-4">
-
-                <button id="btn-create" class="w-full bg-green-500 hover:bg-green-400 text-black font-black uppercase tracking-wider py-3 rounded-lg shadow-[0_0_15px_rgba(34,197,94,0.4)] transition-all transform hover:scale-[1.02]">
-                    Create New Room
-                </button>
-
-                <div class="relative flex items-center py-2">
-                    <div class="flex-grow border-t border-white/10"></div>
-                    <span class="flex-shrink-0 mx-4 text-white/40 text-xs font-bold">OR</span>
-                    <div class="flex-grow border-t border-white/10"></div>
-                </div>
-
-                <div class="flex space-x-2">
-                    <input type="text" id="room-input" class="flex-1 bg-white/10 border border-white/20 rounded-lg p-3 text-white font-bold text-center uppercase outline-none focus:border-blue-400 focus:bg-white/20 transition-all" placeholder="ROOM CODE" maxlength="4">
-                    <button id="btn-join" class="bg-blue-500 hover:bg-blue-400 text-white font-black uppercase tracking-wider px-6 rounded-lg shadow-[0_0_15px_rgba(59,130,246,0.4)] transition-all">
-                        Join
-                    </button>
-                </div>
-                <p id="lobby-error" class="text-red-400 text-xs font-bold text-center h-4"></p>
-            </div>
-        </div>
+<body>
+    <div id="ui" style="position: absolute; z-index: 10; padding: 10px; color: white; background: rgba(0,0,0,0.5);">
+        <input type="text" id="roomCode" placeholder="Código de Sala" value="lobby1">
+        <button onclick="joinRoom()">Unirse</button>
     </div>
 
-    <!-- In-Game UI Overlay (Hidden initially) -->
-    <div id="game-ui" class="absolute inset-0 pointer-events-none z-10 hidden">
-        <div class="absolute top-0 left-0 w-full p-6 flex justify-between items-start">
-            <div>
-                <h1 class="text-3xl font-black text-white drop-shadow-md tracking-tight">PRO SOCCER <span class="text-yellow-400">ONLINE</span></h1>
-                <div class="mt-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 inline-flex items-center space-x-2 shadow-lg">
-                    <div class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
-                    <span class="text-white font-bold tracking-widest text-sm">ROOM: <span id="ui-room-code" class="text-yellow-400">XXXX</span></span>
-                </div>
-            </div>
-            <div class="bg-black/50 backdrop-blur-md p-4 rounded-xl border border-white/10 text-white shadow-xl pointer-events-auto">
-                <h3 class="font-bold text-sm text-yellow-400 mb-2 uppercase tracking-wider">Controls</h3>
-                <ul class="text-sm space-y-1">
-                    <li><kbd class="bg-white/20 px-1.5 py-0.5 rounded">W</kbd> <kbd class="bg-white/20 px-1.5 py-0.5 rounded">A</kbd> <kbd class="bg-white/20 px-1.5 py-0.5 rounded">S</kbd> <kbd class="bg-white/20 px-1.5 py-0.5 rounded">D</kbd> to Move</li>
-                    <li><kbd class="bg-white/20 px-1.5 py-0.5 rounded">Shift</kbd> to Sprint</li>
-                    <li><kbd class="bg-white/20 px-1.5 py-0.5 rounded">Space</kbd> (Hold) to Power Kick</li>
-                    <li class="pt-2 text-yellow-400 text-xs font-bold">Modifiers (Hold w/ Space):</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↑</kbd> Lob  <kbd class="bg-white/20 px-1 py-0.5 rounded text-xs ml-1">←</kbd> / <kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">→</kbd> Curve</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">←</kbd> + <kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">→</kbd> Knuckleball</li>
-                    <li class="pt-2 text-purple-400 text-xs font-bold">Skill Moves & Aerial:</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↓</kbd> x2 (While Charging) Feint</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↑</kbd> (While Volley) Dive</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↓</kbd> then <kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↑</kbd> Rainbow Flick</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↑</kbd> x2 Jump with Ball</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↑</kbd> (No Ball) Jump / Header</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↓</kbd> (Mid-air) Trap Ball</li>
-                    <li><kbd class="bg-white/20 px-1 py-0.5 rounded text-xs">↑</kbd> (Hold) Lift Ball</li>
-                </ul>
-            </div>
-        </div>
+    <!-- Importar Three.js y Socket.io -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
-        <!-- Power UI (Tracks to player) -->
-        <div id="power-container" class="absolute w-20 h-2.5 bg-gray-900 rounded-full overflow-hidden border border-white/20 z-20 opacity-0 transition-opacity duration-150 shadow-md" style="transform: translateX(-50%);">
-            <div id="power-bar" class="h-full bg-green-400 w-0"></div>
-        </div>
+    <script>
+        const socket = io();
+        let myId = null;
+        let isJoined = false;
 
-        <!-- Stamina UI -->
-        <div class="absolute bottom-6 left-6 w-64 bg-black/50 backdrop-blur-md p-4 rounded-xl border border-white/10 shadow-xl z-10">
-            <div class="flex justify-between items-end mb-2">
-                <h3 class="font-bold text-sm text-white uppercase tracking-wider">Stamina</h3>
-            </div>
-            <div class="w-full h-3 bg-gray-900 rounded-full overflow-hidden border border-white/10">
-                <div id="stamina-bar" class="h-full bg-green-400 w-full transition-colors duration-300"></div>
-            </div>
-        </div>
-    </div>
+        // --- Configuración Three.js ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
 
-    <!-- 3D Container -->
-    <div id="game-container" class="w-full h-screen relative z-0"></div>
+        // Iluminación
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(5, 10, 5);
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x404040));
 
-    <script type="module">
-        // --- SOCKET.IO MULTIPLAYER SETUP ---
-        const socket = io(); // Connects to the Node.js server automatically
+        // Entorno visual
+        const groundGeo = new THREE.PlaneGeometry(100, 100);
+        const groundMat = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
 
-        // Multiplayer State
-        let userId = null;
-        let isHost = false;
-        let currentRoom = null;
-        let nickname = "Player";
-        let networkBall = { x: 0, y: 0.4, z: 0, vx: 0, vy: 0, vz: 0, possessor: null };
-        let remotePlayersData = {}; 
-        let remotePlayerMeshes = {}; 
+        // Almacenamiento de mallas visuales y posiciones objetivo
+        const meshes = {};
+        const targetStates = { players: {}, objects: {} };
 
-        // UI Elements
-        const lobbyUI = document.getElementById('lobby-ui');
-        const gameUI = document.getElementById('game-ui');
-        const errorText = document.getElementById('lobby-error');
+        // Materiales
+        const playerMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+        const otherPlayerMat = new THREE.MeshLambertMaterial({ color: 0x0000ff });
+        const boxMat = new THREE.MeshLambertMaterial({ color: 0xffff00 });
 
-        // 1. Lobby Logic
-        document.getElementById('btn-create').addEventListener('click', () => {
-            nickname = document.getElementById('nickname-input').value || "Host";
-            socket.emit('create-room', { nickname });
-        });
+        socket.on('connect', () => { myId = socket.id; });
 
-        document.getElementById('btn-join').addEventListener('click', () => {
-            const code = document.getElementById('room-input').value.toUpperCase();
-            if (code.length !== 4) {
-                errorText.innerText = "Invalid room code.";
-                return;
+        window.joinRoom = () => {
+            const roomCode = document.getElementById('roomCode').value;
+            socket.emit('joinRoom', roomCode);
+            document.getElementById('ui').style.display = 'none';
+            isJoined = true;
+        };
+
+        // Recibir el estado del servidor (30 veces por segundo)
+        socket.on('gameState', (state) => {
+            // Actualizar posiciones objetivo (no movemos la malla inmediatamente)
+            targetStates.players = state.players;
+            targetStates.objects = state.objects;
+
+            // Instanciar jugadores nuevos
+            for (let id in state.players) {
+                if (!meshes[id]) {
+                    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), id === myId ? playerMat : otherPlayerMat);
+                    scene.add(mesh);
+                    meshes[id] = mesh;
+                }
             }
-            nickname = document.getElementById('nickname-input').value || "Guest";
-            socket.emit('join-room', { roomCode: code, nickname });
+
+            // Instanciar objetos de físicas nuevos
+            for (let id in state.objects) {
+                if (!meshes[id]) {
+                    const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), boxMat); // Tamaño 2x2x2 porque Cannon usa half-extents
+                    scene.add(mesh);
+                    meshes[id] = mesh;
+                }
+            }
         });
 
-        // 2. Socket Listeners
-        socket.on('room-created', (data) => {
-            currentRoom = data.roomCode;
-            isHost = data.isHost;
-            userId = data.id; // Socket ID acts as User ID
-            startGame();
+        socket.on('playerLeft', (id) => {
+            if (meshes[id]) {
+                scene.remove(meshes[id]);
+                delete meshes[id];
+            }
         });
 
-        socket.on('room-joined', (data) => {
-            currentRoom = data.roomCode;
-            isHost = data.isHost;
-            userId = data.id;
-            startGame();
+        // Controles locales
+        const keys = { up: false, down: false, left: false, right: false };
+        window.addEventListener('keydown', (e) => {
+            if(e.key === 'w') keys.up = true;
+            if(e.key === 's') keys.down = true;
+            if(e.key === 'a') keys.left = true;
+            if(e.key === 'd') keys.right = true;
+        });
+        window.addEventListener('keyup', (e) => {
+            if(e.key === 'w') keys.up = false;
+            if(e.key === 's') keys.down = false;
+            if(e.key === 'a') keys.left = false;
+            if(e.key === 'd') keys.right = false;
         });
 
-        socket.on('error', (msg) => {
-            errorText.innerText = msg;
-        });
+        // --- Bucle Render Cliente (60+ FPS) ---
+        function animate() {
+            requestAnimationFrame(animate);
 
-        socket.on('sync-state', (data) => {
-            remotePlayersData = data.players;
-            
-            if (!hasPossession && !isKicking) {
-                // CRITICAL FIX: If the ball is free, absorb the Host's velocity so our local simulation predicts the exact same 60fps arc!
-                if (data.ball.possessor === null) {
-                    if (networkBall.possessor !== null || 
-                        Math.abs(networkBall.vx - data.ball.vx) > 0.05 || 
-                        Math.abs(networkBall.vy - data.ball.vy) > 0.05 ||
-                        Math.abs(networkBall.vz - data.ball.vz) > 0.05) {
-                        
-                        ballVelocity.set(data.ball.vx, data.ball.vy, data.ball.vz);
+            if (isJoined) {
+                // Enviar input al servidor continuamente
+                socket.emit('move', keys);
+
+                // INTERPOLACIÓN (El secreto de la suavidad)
+                const lerpFactor = 0.2; // Qué tan rápido se suaviza (0 a 1)
+
+                for (let id in targetStates.players) {
+                    if (meshes[id]) {
+                        const targetPos = targetStates.players[id];
+                        meshes[id].position.lerp(new THREE.Vector3(targetPos.x, targetPos.y, targetPos.z), lerpFactor);
                     }
                 }
-                networkBall = data.ball;
+
+                for (let id in targetStates.objects) {
+                    if (meshes[id]) {
+                        const target = targetStates.objects[id];
+                        meshes[id].position.lerp(new THREE.Vector3(target.x, target.y, target.z), lerpFactor);
+                        
+                        // Para rotaciones físicas suaves, usamos slerp (Spherical Lerp)
+                        const targetQuat = new THREE.Quaternion(target.qx, target.qy, target.qz, target.qw);
+                        meshes[id].quaternion.slerp(targetQuat, lerpFactor);
+                    }
+                }
+
+                // CÁMARA OVER-THE-SHOULDER
+                if (meshes[myId]) {
+                    const playerPos = meshes[myId].position;
+                    
+                    // Posición deseada: detrás, arriba y un poco a la derecha del jugador
+                    const offset = new THREE.Vector3(2, 4, 8); 
+                    const targetCamPos = playerPos.clone().add(offset);
+                    
+                    // Suavizar también el movimiento de la cámara para que no maree
+                    camera.position.lerp(targetCamPos, 0.1);
+                    camera.lookAt(playerPos);
+                }
             }
-        });
 
-        // 3. Main Game Setup
-        function startGame() {
-            lobbyUI.classList.add('hidden');
-            gameUI.classList.remove('hidden');
-            document.getElementById('ui-room-code').innerText = currentRoom;
-            
-            init3DEngine();
+            renderer.render(scene, camera);
         }
+        animate();
 
-        // --- THREE.JS ENGINE ---
-        function init3DEngine() {
-            const container = document.getElementById('game-container');
-            const scene = new THREE.Scene();
-            scene.background = new THREE.Color('#87CEEB'); 
-            scene.fog = new THREE.FogExp2('#87CEEB', 0.005);
-
-            const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-            
-            const renderer = new THREE.WebGLRenderer({ antialias: true });
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.shadowMap.enabled = true;
-            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-            container.appendChild(renderer.domElement);
-
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-            scene.add(ambientLight);
-
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(-50, 100, 50);
-            dirLight.castShadow = true;
-            dirLight.shadow.camera.top = 60;
-            dirLight.shadow.camera.bottom = -60;
-            dirLight.shadow.camera.left = -100;
-            dirLight.shadow.camera.right = 100;
-            dirLight.shadow.mapSize.width = 2048;
-            dirLight.shadow.mapSize.height = 2048;
-            scene.add(dirLight);
-
-            // Pitch Generation
-            function createPitchTexture() {
-                const canvas = document.createElement('canvas');
-                canvas.width = 2048; canvas.height = 1024;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#2d8a2d';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = '#287d28';
-                for(let i = 0; i < canvas.width; i += 100) ctx.fillRect(i, 0, 50, canvas.height);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                ctx.lineWidth = 8;
-                const padX = 100, padY = 50, w = canvas.width - padX * 2, h = canvas.height - padY * 2;
-                ctx.strokeRect(padX, padY, w, h);
-                ctx.beginPath(); ctx.moveTo(canvas.width / 2, padY); ctx.lineTo(canvas.width / 2, canvas.height - padY); ctx.stroke();
-                ctx.beginPath(); ctx.arc(canvas.width / 2, canvas.height / 2, 120, 0, Math.PI * 2); ctx.stroke();
-                ctx.beginPath(); ctx.arc(canvas.width / 2, canvas.height / 2, 8, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; ctx.fill();
-                const penW = 250, penH = 400;
-                ctx.strokeRect(padX, canvas.height/2 - penH/2, penW, penH);
-                ctx.strokeRect(padX, canvas.height/2 - 150, 100, 300); 
-                ctx.strokeRect(canvas.width - padX - penW, canvas.height/2 - penH/2, penW, penH);
-                ctx.strokeRect(canvas.width - padX - 100, canvas.height/2 - 150, 100, 300); 
-                const texture = new THREE.CanvasTexture(canvas);
-                texture.wrapS = THREE.ClampToEdgeWrapping; texture.wrapT = THREE.ClampToEdgeWrapping;
-                texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-                return texture;
-            }
-
-            const pitch = new THREE.Mesh(new THREE.PlaneGeometry(160, 80), new THREE.MeshStandardMaterial({ map: createPitchTexture(), roughness: 0.8, metalness: 0.1 }));
-            pitch.rotation.x = -Math.PI / 2;
-            pitch.receiveShadow = true;
-            scene.add(pitch);
-
-            // Helper to generate 3D nameplates
-            function createNameplate(name, isLocal = false) {
-                const canvas = document.createElement('canvas');
-                canvas.width = 256; canvas.height = 64;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = isLocal ? 'rgba(59, 130, 246, 0.7)' : 'rgba(0, 0, 0, 0.6)';
-                ctx.roundRect(16, 8, 224, 48, 24);
-                ctx.fill();
-                ctx.font = 'bold 26px sans-serif';
-                ctx.fillStyle = isLocal ? '#ffffff' : '#facc15';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(name, 128, 34);
-                const tex = new THREE.CanvasTexture(canvas);
-                const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
-                const sprite = new THREE.Sprite(mat);
-                sprite.scale.set(3.5, 0.875, 1);
-                sprite.position.set(0, 2.6, 0); 
-                return sprite;
-            }
-
-            // --- LOCAL PLAYER ---
-            const playerGroup = new THREE.Group();
-            playerGroup.rotation.order = 'YXZ'; 
-            scene.add(playerGroup);
-
-            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 1.8, 16), new THREE.MeshStandardMaterial({ color: 0x3b82f6, roughness: 0.5 }));
-            body.position.y = 1.3; 
-            body.castShadow = true;
-            playerGroup.add(body);
-
-            const visor = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 0.6), new THREE.MeshStandardMaterial({ color: 0x222222 }));
-            visor.position.set(0, 2.2, 0.4); 
-            visor.castShadow = true;
-            playerGroup.add(visor);
-
-            const localNameplate = createNameplate(nickname, true);
-            playerGroup.add(localNameplate);
-
-            // Starting position based on host/client
-            playerGroup.position.set(isHost ? -20 : 20, 0, 0);
-
-            // --- THE BALL ---
-            const ballGeo = new THREE.SphereGeometry(0.4, 32, 32);
-            const ballMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.1 });
-            const ball = new THREE.Mesh(ballGeo, ballMat);
-            ball.position.set(0, 0.4, 0);
-            ball.castShadow = true;
-            scene.add(ball);
-
-            // --- BALL TRACKER SHADOW & DROP LINE ---
-            const ballTrackerGroup = new THREE.Group();
-            scene.add(ballTrackerGroup);
-            
-            const ballShadowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide });
-            const shadowRing = new THREE.Mesh(new THREE.RingGeometry(0.4, 0.45, 32), ballShadowMat);
-            shadowRing.rotation.x = -Math.PI / 2; shadowRing.position.y = 0.02; 
-            ballTrackerGroup.add(shadowRing);
-
-            const shadowDot = new THREE.Mesh(new THREE.CircleGeometry(0.08, 16), ballShadowMat);
-            shadowDot.rotation.x = -Math.PI / 2; shadowDot.position.y = 0.02; 
-            ballTrackerGroup.add(shadowDot);
-
-            const dropLineMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false });
-            const dropLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0)]);
-            const dropLine = new THREE.Line(dropLineGeo, dropLineMat);
-            scene.add(dropLine);
-
-            // --- FULL GAME STATE VARIABLES ---
-            let ballVelocity = new THREE.Vector3();
-            const ballFriction = 0.95;
-            let hasPossession = false;
-            let possessionCooldown = 0;
-            let dribbleTimer = 0; 
-            let visualDribbleOffset = 0; 
-
-            let isCharging = false;
-            let isChargingVolley = false;
-            let chargeAmount = 0;
-            let kickCanceled = false; 
-
-            // NEW: Temporary Multiplayer Physics Authority
-            let isKicking = false;
-            let kickAuthorityTimer = 0;
-
-            let currentCurve = 0; 
-            let curveTimer = 0; 
-            let isKnuckleball = false;
-            let knuckleTimer = 0;
-            let lateralCurveVector = new THREE.Vector3();
-
-            let lastDownArrowTime = 0;
-            let rainbowFlickState = 0; 
-            let rainbowFlickTimer = 0;
-            let upArrowHoldDuration = 0; 
-
-            let isJumping = false;
-            let jumpType = null; 
-            let isDiving = false;
-            let isRecovering = false;
-            let recoveryTimer = 0;
-            let intentToTrap = false; 
-            let playerVelocityY = 0;
-            let jumpVelocityX = 0;
-            let jumpVelocityZ = 0;
-            let lastUpArrowTime = 0;
-
-            // --- INPUT HANDLING ---
-            const keys = { w: false, a: false, s: false, d: false, shift: false, space: false, arrowup: false, arrowdown: false, arrowleft: false, arrowright: false };
-            
-            window.addEventListener('keydown', (e) => {
-                const key = e.key.toLowerCase();
-                
-                // Prevent browser scrolling from stealing arrow key/spacebar inputs!
-                if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
-                    e.preventDefault();
-                }
-
-                // Prevent OS auto-repeat from triggering combos multiple times
-                if (e.repeat) return;
-
-                if (keys.hasOwnProperty(key)) keys[key] = true;
-                if (e.key === ' ') keys.space = true;
-                if (e.key === 'Shift') keys.shift = true;
-                
-                // Combo Trackers
-                const now = performance.now();
-                if (key === 'arrowdown') {
-                    // Check for Shot Cancel / Feint
-                    if (now - lastDownArrowTime < 300 && (isCharging || isChargingVolley)) {
-                        isCharging = false;
-                        isChargingVolley = false;
-                        chargeAmount = 0;
-                        kickCanceled = true; 
-                    } 
-                    // Check for Mid-Air Trap intent
-                    else if (isJumping && jumpType === 'withoutBall') {
-                        intentToTrap = true;
-                    }
-                    lastDownArrowTime = now;
-                } else if (key === 'arrowup') {
-                    // 0. Check for Dive Header (from Volley Charge)
-                    if (isChargingVolley) {
-                        isChargingVolley = false;
-                        chargeAmount = 0;
-                        kickCanceled = true;
-                        
-                        isJumping = true;
-                        jumpType = 'dive';
-                        isDiving = true;
-                        playerVelocityY = 0.25; 
-                        
-                        const diveSpeed = 15;
-                        jumpVelocityX = Math.sin(activeDribbleAngle) * diveSpeed;
-                        jumpVelocityZ = Math.cos(activeDribbleAngle) * diveSpeed;
-                        lastUpArrowTime = now;
-                    }
-                    // 1. Check for Rainbow Flick (Down then Up)
-                    else if (now - lastDownArrowTime < 600 && hasPossession && rainbowFlickState === 0 && !isJumping && !isRecovering) { 
-                        rainbowFlickState = 1; 
-                        rainbowFlickTimer = 0.15; 
-                        lastDownArrowTime = 0; 
-                    }
-                    // 2. Check for Double-Tap Jump WITH Ball
-                    else if (now - lastUpArrowTime < 300 && hasPossession && !isJumping && rainbowFlickState === 0 && !isRecovering) {
-                        isJumping = true;
-                        jumpType = 'withBall';
-                        playerVelocityY = 0.26; 
-                        
-                        let moveX = 0, moveZ = 0;
-                        if (keys.w) moveZ -= 1;
-                        if (keys.s) moveZ += 1;
-                        if (keys.a) moveX -= 1;
-                        if (keys.d) moveX += 1;
-                        
-                        const isSprinting = keys.shift && !isExhausted && (moveX !== 0 || moveZ !== 0);
-                        const speed = isSprinting ? 11 : 7;
-                        
-                        const moveVec = new THREE.Vector2(moveX, moveZ);
-                        if (moveVec.length() > 0) moveVec.normalize();
-                        
-                        jumpVelocityX = moveVec.x * speed;
-                        jumpVelocityZ = moveVec.y * speed;
-                    }
-                    // 3. Check for Single-Tap Jump WITHOUT Ball
-                    else if (!hasPossession && !isJumping && rainbowFlickState === 0 && !isRecovering) {
-                        isJumping = true;
-                        jumpType = 'withoutBall';
-                        intentToTrap = false;
-                        playerVelocityY = 0.32; 
-                        
-                        let moveX = 0, moveZ = 0;
-                        if (keys.w) moveZ -= 1;
-                        if (keys.s) moveZ += 1;
-                        if (keys.a) moveX -= 1;
-                        if (keys.d) moveX += 1;
-                        
-                        const isSprinting = keys.shift && !isExhausted && (moveX !== 0 || moveZ !== 0) && !isChargingVolley;
-                        let speed = isSprinting ? 11 : 7;
-                        if (isChargingVolley) speed = 3.5; 
-                        
-                        const moveVec = new THREE.Vector2(moveX, moveZ);
-                        if (moveVec.length() > 0) moveVec.normalize();
-                        
-                        jumpVelocityX = moveVec.x * speed;
-                        jumpVelocityZ = moveVec.y * speed;
-                    }
-                    lastUpArrowTime = now;
-                }
-            });
-
-            window.addEventListener('keyup', (e) => {
-                const key = e.key.toLowerCase();
-                if (keys.hasOwnProperty(key)) keys[key] = false;
-                if (e.key === ' ') {
-                    keys.space = false;
-                    kickCanceled = false; 
-                }
-                if (e.key === 'Shift') keys.shift = false;
-            });
-
-            let targetRotation = 0;
-            let activeDribbleAngle = 0; 
-            let currentStamina = 100;
-            const maxStamina = 100;
-            let isExhausted = false;
-            const staminaBar = document.getElementById('stamina-bar');
-
-            // --- NETWORK TRANSMIT LOOP ---
-            function emitBallState() {
-                if (!userId || !currentRoom) return;
-                socket.emit('ball-update', {
-                    roomCode: currentRoom,
-                    x: ball.position.x, y: ball.position.y, z: ball.position.z,
-                    vx: ballVelocity.x, vy: ballVelocity.y, vz: ballVelocity.z,
-                    possessor: (hasPossession || isKicking) ? userId : null // Hold network authority if kicking!
-                });
-            }
-
-            setInterval(() => {
-                if (!userId || !currentRoom) return;
-
-                // Sync Player Position
-                socket.emit('player-update', {
-                    roomCode: currentRoom,
-                    x: playerGroup.position.x, y: playerGroup.position.y, z: playerGroup.position.z,
-                    rotX: playerGroup.rotation.x, rotY: playerGroup.rotation.y
-                });
-
-                // Sync Ball (If possessed, recently kicked, or acting as neutral host)
-                if (hasPossession || isKicking || (isHost && networkBall.possessor === null)) {
-                    emitBallState();
-                }
-            }, 50); // 20 updates per second
-
-            const clock = new THREE.Clock();
-
-            // --- MAIN ANIMATION LOOP ---
-            function animate() {
-                requestAnimationFrame(animate);
-                const delta = clock.getDelta();
-
-                // MULTIPLAYER LERP (Smooth out remote players)
-                const nowTs = Date.now();
-                for (let id in remotePlayersData) {
-                    if (id === userId) continue;
-                    const data = remotePlayersData[id];
-                    
-                    if (!remotePlayerMeshes[id]) {
-                        const g = new THREE.Group();
-                        g.rotation.order = 'YXZ';
-                        const b = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 1.8, 16), new THREE.MeshStandardMaterial({ color: 0xff3333, roughness: 0.5 }));
-                        b.position.y = 1.3; b.castShadow = true; g.add(b);
-                        const v = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 0.6), new THREE.MeshStandardMaterial({ color: 0x222222 }));
-                        v.position.set(0, 2.2, 0.4); v.castShadow = true; g.add(v);
-                        g.add(createNameplate(data.nickname));
-                        scene.add(g);
-                        remotePlayerMeshes[id] = g;
-                    }
-                    
-                    const mesh = remotePlayerMeshes[id];
-                    if (nowTs - data.timestamp > 5000) {
-                        scene.remove(mesh);
-                        delete remotePlayerMeshes[id];
-                        delete remotePlayersData[id];
-                        continue;
-                    }
-
-                    mesh.position.lerp(new THREE.Vector3(data.x, data.y, data.z), 15 * delta);
-                    let rotDiffY = data.rotY - mesh.rotation.y;
-                    while (rotDiffY < -Math.PI) rotDiffY += Math.PI * 2;
-                    while (rotDiffY > Math.PI) rotDiffY -= Math.PI * 2;
-                    mesh.rotation.y += rotDiffY * 15 * delta;
-                    mesh.rotation.x += (data.rotX - mesh.rotation.x) * 15 * delta;
-                }
-
-                // 1. LOCAL PLAYER MOVEMENT
-                let moveX = 0; let moveZ = 0;
-
-                // Disable movement inputs if recovering from a dive
-                if (!isRecovering) {
-                    if (keys.w) moveZ -= 1;
-                    if (keys.s) moveZ += 1;
-                    if (keys.a) moveX -= 1;
-                    if (keys.d) moveX += 1;
-                }
-
-                // VOLLEY CHARGE LOGIC (Slows movement)
-                if (!hasPossession && keys.space && !kickCanceled && !isJumping && !isRecovering && possessionCooldown <= 0) {
-                    isChargingVolley = true;
-                    chargeAmount += delta * 0.8;
-                    if (chargeAmount > 1) chargeAmount = 1;
-                } else {
-                    if (isChargingVolley) {
-                        isChargingVolley = false;
-                        chargeAmount = 0; 
-                    }
-                }
-
-                const isMoving = moveX !== 0 || moveZ !== 0;
-                
-                if (currentStamina <= 0) {
-                    isExhausted = true;
-                } else if (currentStamina >= 25) {
-                    isExhausted = false; 
-                }
-
-                let isSprinting = keys.shift && !isExhausted && isMoving && !isChargingVolley; 
-                
-                if (isSprinting) {
-                    currentStamina -= 25 * delta; 
-                    if (currentStamina < 0) currentStamina = 0;
-                } else if (!keys.shift) {
-                    currentStamina += 15 * delta; 
-                    if (currentStamina > maxStamina) currentStamina = maxStamina;
-                }
-                
-                staminaBar.style.width = `${(currentStamina / maxStamina) * 100}%`;
-                if (isExhausted) {
-                    staminaBar.classList.remove('bg-green-400');
-                    staminaBar.classList.add('bg-red-500');
-                } else {
-                    staminaBar.classList.remove('bg-red-500');
-                    staminaBar.classList.add('bg-green-400');
-                }
-
-                const moveVec = new THREE.Vector2(moveX, moveZ);
-                
-                // Jump/Air Physics vs Ground Movement
-                if (isJumping) {
-                    playerGroup.position.x += jumpVelocityX * delta;
-                    playerGroup.position.z += jumpVelocityZ * delta;
-                    
-                    playerVelocityY -= 0.015; // Gravity
-                    playerGroup.position.y += playerVelocityY;
-                    
-                    if (playerGroup.position.y <= 0) {
-                        playerGroup.position.y = 0;
-                        isJumping = false;
-                        if (jumpType === 'dive') {
-                            isDiving = false;
-                            isRecovering = true;
-                            recoveryTimer = 1.5; 
-                        }
-                        jumpType = null;
-                        intentToTrap = false;
-                    }
-                    
-                    if (moveVec.length() > 0) {
-                        moveVec.normalize();
-                        targetRotation = Math.atan2(moveVec.x, moveVec.y);
-                        activeDribbleAngle = targetRotation;
-                    }
-                } else {
-                    if (moveVec.length() > 0) {
-                        moveVec.normalize();
-                        targetRotation = Math.atan2(moveVec.x, moveVec.y);
-                        activeDribbleAngle = targetRotation;
-
-                        let speed = isSprinting ? 11 : 7; 
-                        if (isChargingVolley) speed = 3.5; 
-                        
-                        playerGroup.position.x += moveVec.x * speed * delta;
-                        playerGroup.position.z += moveVec.y * speed * delta;
-                    } else {
-                        targetRotation = playerGroup.rotation.y;
-                        activeDribbleAngle = playerGroup.rotation.y;
-                    }
-                }
-
-                // Clamp player to boundaries
-                playerGroup.position.x = Math.max(-78, Math.min(78, playerGroup.position.x));
-                playerGroup.position.z = Math.max(-38, Math.min(38, playerGroup.position.z));
-
-                // Smooth Rotation
-                let rotDiff = targetRotation - playerGroup.rotation.y;
-                while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-                while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-                playerGroup.rotation.y += rotDiff * 10 * delta; 
-
-                // Dive & Recovery Animations
-                if (isDiving) {
-                    playerGroup.rotation.x -= (playerGroup.rotation.x - (-Math.PI / 2.2)) * 12 * delta;
-                } else if (isRecovering) {
-                    recoveryTimer -= delta;
-                    if (recoveryTimer < 1.0) { 
-                        playerGroup.rotation.x -= (playerGroup.rotation.x - 0) * 6 * delta;
-                    }
-                    if (recoveryTimer <= 0) {
-                        isRecovering = false;
-                        playerGroup.rotation.x = 0;
-                    }
-                } else {
-                    playerGroup.rotation.x = 0; 
-                }
-
-                // Cooldown timers
-                if (possessionCooldown > 0) possessionCooldown -= delta;
-                if (dribbleTimer > 0) dribbleTimer -= delta;
-
-                // Ball Lift Mechanic (Holding Up Arrow)
-                if (keys.arrowup && hasPossession && !isJumping && rainbowFlickState === 0 && !isCharging) {
-                    upArrowHoldDuration += delta;
-                    if (upArrowHoldDuration >= 0.2) { 
-                        hasPossession = false;
-                        possessionCooldown = 0.5; 
-                        
-                        const liftForwardStrength = 0.08; 
-                        const liftVerticalStrength = 0.42; 
-                        
-                        ballVelocity.x = Math.sin(activeDribbleAngle) * liftForwardStrength;
-                        ballVelocity.z = Math.cos(activeDribbleAngle) * liftForwardStrength;
-                        ballVelocity.y = liftVerticalStrength;
-                        
-                        currentCurve = 0;
-                        curveTimer = 0;
-                        isKnuckleball = false;
-                        upArrowHoldDuration = -9999; 
-                        
-                        isKicking = true;
-                        kickAuthorityTimer = 0.5; // Seize physics authority!
-                        emitBallState();
-                    }
-                } else if (!keys.arrowup) {
-                    upArrowHoldDuration = 0; 
-                }
-
-                // 2. HITBOX & INTERACTIONS (Gain Possession or Volley)
-                let pCenter = playerGroup.position.clone();
-                if (isJumping && jumpType === 'withoutBall') pCenter.y += 1.2; 
-                else if (isJumping && jumpType === 'dive') { pCenter.x += Math.sin(activeDribbleAngle); pCenter.z += Math.cos(activeDribbleAngle); pCenter.y += 0.5; }
-                
-                const distToBall = pCenter.distanceTo(ball.position);
-                const collisionDist = (isJumping && (jumpType === 'withoutBall' || jumpType === 'dive')) ? 1.5 : 1.2; 
-
-                if (!hasPossession && !isRecovering && distToBall < collisionDist && possessionCooldown <= 0) {
-                    if (isChargingVolley) {
-                        // INSTANT VOLLEY KICK!
-                        const isLob = keys.arrowup;
-                        isKnuckleball = keys.arrowleft && keys.arrowright;
-                        let curveDir = 0;
-                        if (!isKnuckleball) { if (keys.arrowleft) curveDir = 1; if (keys.arrowright) curveDir = -1; }
-
-                        const curveAngleOffset = curveDir * -0.75 * (0.5 + chargeAmount * 0.5);
-                        const initialShotAngle = activeDribbleAngle + curveAngleOffset;
-
-                        if (!isLob) {
-                            const ks = 0.35 + (chargeAmount * 0.9);
-                            ballVelocity.set(Math.sin(initialShotAngle)*ks, 0.22 + (0.15*chargeAmount), Math.cos(initialShotAngle)*ks);
-                        } else {
-                            const lsX = 0.25 + (chargeAmount * 0.5);
-                            ballVelocity.set(Math.sin(initialShotAngle)*lsX, 0.35 + (chargeAmount*0.35), Math.cos(initialShotAngle)*lsX);
-                        }
-                        
-                        if (curveDir !== 0) {
-                            currentCurve = curveDir * 0.018 * (chargeAmount + 0.5); 
-                            lateralCurveVector.set(Math.cos(initialShotAngle), 0, -Math.sin(initialShotAngle));
-                            curveTimer = 0.6 + (chargeAmount * 0.8);
-                        } else { currentCurve = 0; curveTimer = 0; }
-                        
-                        possessionCooldown = 0.5; isChargingVolley = false; chargeAmount = 0; knuckleTimer = 0; kickCanceled = true; 
-                        isKicking = true; kickAuthorityTimer = 0.5;
-                        emitBallState();
-                    } else if (isJumping && jumpType === 'dive') {
-                        // DIVE HEADER HIT!
-                        ballVelocity.set(Math.sin(activeDribbleAngle)*0.5 + jumpVelocityX*delta, 0.25, Math.cos(activeDribbleAngle)*0.5 + jumpVelocityZ*delta);
-                        possessionCooldown = 0.8; currentCurve = 0; curveTimer = 0; isKnuckleball = false;
-                        isKicking = true; kickAuthorityTimer = 0.5;
-                        emitBallState();
-                    } else if (isJumping && jumpType === 'withoutBall') {
-                        if (intentToTrap) {
-                            hasPossession = true; jumpType = 'withBall'; 
-                        } else {
-                            // Header Hit
-                            ballVelocity.set(jumpVelocityX*delta*1.6 + Math.sin(activeDribbleAngle)*0.2, 0.30, jumpVelocityZ*delta*1.6 + Math.cos(activeDribbleAngle)*0.2);
-                            possessionCooldown = 0.4; currentCurve = 0; curveTimer = 0; isKnuckleball = false;
-                            isKicking = true; kickAuthorityTimer = 0.5;
-                            emitBallState();
-                        }
-                    } else {
-                        hasPossession = true; // Regular walk-over possession
-                    }
-                }
-
-                // 3. KICK AUTHORITY TIMERS
-                if (isKicking) {
-                    kickAuthorityTimer -= delta;
-                    if (kickAuthorityTimer <= 0) {
-                        isKicking = false;
-                        emitBallState(); // Tell network we relinquish control to the Host
-                    }
-                }
-
-                // 4. BALL PHYSICS UPDATE
-                if (hasPossession) {
-                    if (distToBall > 6.0) {
-                        hasPossession = false; isCharging = false; chargeAmount = 0; rainbowFlickState = 0;
-                        emitBallState(); // Lost ball
-                    } else if (rainbowFlickState === 1) {
-                        // Rainbow Flick Pullback
-                        rainbowFlickTimer -= delta;
-                        const targetX = playerGroup.position.x - Math.sin(activeDribbleAngle) * 1.2;
-                        const targetZ = playerGroup.position.z - Math.cos(activeDribbleAngle) * 1.2;
-                        const prevX = ball.position.x; const prevZ = ball.position.z;
-                        
-                        const lerpSpeed = 25 * delta;
-                        ball.position.x += (targetX - ball.position.x) * lerpSpeed;
-                        ball.position.z += (targetZ - ball.position.z) * lerpSpeed;
-                        ball.position.y = 0.4; ballVelocity.set(0, 0, 0); 
-
-                        ball.rotation.x += (ball.position.z - prevZ) * 2; ball.rotation.z -= (ball.position.x - prevX) * 2;
-
-                        if (rainbowFlickTimer <= 0) {
-                            // Rainbow Flick Pop
-                            hasPossession = false; possessionCooldown = 0.6; isCharging = false; chargeAmount = 0; rainbowFlickState = 0; 
-                            
-                            let ffs = 0.18; let fvs = 0.45; 
-                            if (isSprinting) { ffs=0.35; fvs=0.55; } else if (isMoving) { ffs=0.26; fvs=0.48; }
-                            
-                            ballVelocity.set(Math.sin(activeDribbleAngle)*ffs, fvs, Math.cos(activeDribbleAngle)*ffs);
-                            currentCurve = 0; curveTimer = 0; isKnuckleball = false;
-                            
-                            isKicking = true; kickAuthorityTimer = 0.5;
-                            emitBallState();
-                        }
-                    } else {
-                        // Standard Dribble & Shot Charge
-                        if (!isCharging && keys.space && !kickCanceled && !isRecovering) { isCharging = true; chargeAmount = 0; }
-
-                        if (isCharging) {
-                            if (keys.space) {
-                                chargeAmount += delta * 0.8; if (chargeAmount > 1) chargeAmount = 1;
-                            } else {
-                                // Execute Kick!
-                                hasPossession = false; possessionCooldown = 0.5; 
-
-                                const isLob = keys.arrowup; isKnuckleball = keys.arrowleft && keys.arrowright;
-                                let curveDir = 0; if (!isKnuckleball) { if (keys.arrowleft) curveDir = 1; if (keys.arrowright) curveDir = -1; }
-
-                                const curveAngleOffset = curveDir * -0.75 * (0.5 + chargeAmount * 0.5);
-                                const initialShotAngle = activeDribbleAngle + curveAngleOffset;
-
-                                if (!isLob) {
-                                    const ks = 0.3 + (chargeAmount * 0.9);
-                                    ballVelocity.set(Math.sin(initialShotAngle)*ks, 0.12 + (0.1*chargeAmount), Math.cos(initialShotAngle)*ks);
-                                } else {
-                                    const lsX = 0.2 + (chargeAmount * 0.5);
-                                    ballVelocity.set(Math.sin(initialShotAngle)*lsX, 0.2 + (chargeAmount*0.35), Math.cos(initialShotAngle)*lsX);
-                                }
-                                
-                                if (curveDir !== 0) {
-                                    currentCurve = curveDir * 0.018 * (chargeAmount + 0.5); 
-                                    lateralCurveVector.set(Math.cos(initialShotAngle), 0, -Math.sin(initialShotAngle));
-                                    curveTimer = 0.6 + (chargeAmount * 0.8);
-                                } else { currentCurve = 0; curveTimer = 0; }
-
-                                isCharging = false; chargeAmount = 0; knuckleTimer = 0; 
-                                isKicking = true; kickAuthorityTimer = 0.5;
-                                emitBallState();
-                            }
-                        }
-
-                        if (hasPossession) {
-                            if (!isCharging && isMoving && dribbleTimer <= 0) {
-                                if (isSprinting) { visualDribbleOffset = 3.0; dribbleTimer = 0.4; } 
-                                else { visualDribbleOffset = 1.2; dribbleTimer = 0.35; }
-                            }
-                            if (isCharging) visualDribbleOffset -= visualDribbleOffset * 10 * delta; 
-                            else if (isMoving) visualDribbleOffset -= visualDribbleOffset * 5 * delta; 
-                            if (visualDribbleOffset < 0) visualDribbleOffset = 0;
-
-                            const targetX = playerGroup.position.x + Math.sin(activeDribbleAngle) * (1.5 + visualDribbleOffset);
-                            const targetZ = playerGroup.position.z + Math.cos(activeDribbleAngle) * (1.5 + visualDribbleOffset);
-                            const prevX = ball.position.x; const prevZ = ball.position.z;
-
-                            if (Math.hypot(targetX - ball.position.x, targetZ - ball.position.z) > 0.15) {
-                                const lerpSpeed = 6 * delta;
-                                ball.position.x += (targetX - ball.position.x) * lerpSpeed;
-                                ball.position.z += (targetZ - ball.position.z) * lerpSpeed;
-                            } else { ball.position.x = targetX; ball.position.z = targetZ; }
-                            
-                            ball.position.y = 0.4 + playerGroup.position.y; ballVelocity.set(0, 0, 0); 
-                            currentCurve = 0; curveTimer = 0; isKnuckleball = false;
-
-                            ball.rotation.x += (ball.position.z - prevZ) * 2; ball.rotation.z -= (ball.position.x - prevX) * 2;
-                        }
-                    }
-                } else if (isKicking || networkBall.possessor === null) {
-                    // FREE FLY PHYSICS (Everyone simulates this locally so it renders at a buttery smooth 60fps instead of 20hz network ticks!)
-                    ballVelocity.y -= 0.015; // Gravity
-                    
-                    if (currentCurve !== 0 && ballVelocity.lengthSq() > 0.01) {
-                        if (curveTimer > 0) { ballVelocity.x += lateralCurveVector.x * currentCurve; ballVelocity.z += lateralCurveVector.z * currentCurve; curveTimer -= delta; } 
-                        else currentCurve = 0; 
-                    }
-                    if (isKnuckleball && ballVelocity.lengthSq() > 0.05) {
-                        knuckleTimer += delta;
-                        if (knuckleTimer > 0.03) { 
-                            ballVelocity.x += (Math.random() - 0.5) * 0.1; ballVelocity.y += (Math.random() - 0.5) * 0.06; ballVelocity.z += (Math.random() - 0.5) * 0.1;
-                            if (Math.random() > 0.8) { ballVelocity.x += (Math.random() - 0.5) * 0.2; ballVelocity.z += (Math.random() - 0.5) * 0.2; }
-                            knuckleTimer = 0;
-                        }
-                    }
-
-                    ball.position.add(ballVelocity);
-                    
-                    // Ground Bounce
-                    if (ball.position.y <= 0.4) {
-                        ball.position.y = 0.4; currentCurve *= 0.8; curveTimer = 0; isKnuckleball = false; 
-                        if (ballVelocity.y < -0.05) { ballVelocity.y *= -0.6; ballVelocity.x *= 0.9; ballVelocity.z *= 0.9; } 
-                        else { ballVelocity.y = 0; ballVelocity.x *= ballFriction; ballVelocity.z *= ballFriction; }
-                    } else {
-                        ballVelocity.x *= 0.99; ballVelocity.z *= 0.99; // Air friction
-                    }
-
-                    // Rolling rotation
-                    if (ball.position.y <= 0.45) { ball.rotation.x += ballVelocity.z; ball.rotation.z -= ballVelocity.x; }
-                    if (ball.position.y <= 0.4 && ballVelocity.length() < 0.01) ballVelocity.set(0, 0, 0);
-
-                    // Keep ball in bounds
-                    if (ball.position.x > 79 || ball.position.x < -79) { ballVelocity.x *= -1; ball.position.x = Math.sign(ball.position.x) * 79; }
-                    if (ball.position.z > 39 || ball.position.z < -39) { ballVelocity.z *= -1; ball.position.z = Math.sign(ball.position.z) * 39; }
-
-                    // NETWORK CORRECTION (If we are a client, gently pull the ball towards the Host's true position to hide drift)
-                    if (!isHost && !isKicking) {
-                        const netPos = new THREE.Vector3(networkBall.x, networkBall.y, networkBall.z);
-                        const dist = ball.position.distanceTo(netPos);
-                        
-                        if (dist > 1.5) {
-                            // Hard snap if wildly out of sync (e.g., someone hit it and we lagged)
-                            ball.position.copy(netPos);
-                        } else if (dist > 0.1) {
-                            // Soft lerp correction to perfectly hide the 50ms network tick rate!
-                            ball.position.lerp(netPos, 4 * delta);
-                        }
-                    }
-                } else {
-                    // OBSERVER (Network Lerp: Someone else has possession)
-                    ball.position.lerp(new THREE.Vector3(networkBall.x, networkBall.y, networkBall.z), 15 * delta);
-                    ballVelocity.set(networkBall.vx, networkBall.vy, networkBall.vz); 
-                    const dx = networkBall.x - ball.position.x; const dz = networkBall.z - ball.position.z;
-                    if (ball.position.y <= 0.45) { ball.rotation.x += dz*2; ball.rotation.z -= dx*2; }
-                }
-
-                // Update Power UI
-                const powerContainer = document.getElementById('power-container');
-                const powerBar = document.getElementById('power-bar');
-                
-                if (isCharging || isChargingVolley) {
-                    const activeCharge = chargeAmount;
-                    powerContainer.style.opacity = '1';
-                    powerBar.style.width = `${activeCharge * 100}%`;
-                    
-                    if (activeCharge < 0.4) powerBar.className = 'h-full bg-green-400 w-full transition-all';
-                    else if (activeCharge < 0.8) powerBar.className = 'h-full bg-yellow-400 w-full transition-all';
-                    else powerBar.className = 'h-full bg-red-500 w-full transition-all';
-
-                    const playerPos = playerGroup.position.clone();
-                    playerPos.y = 0; 
-                    playerPos.project(camera);
-
-                    const screenX = (playerPos.x * 0.5 + 0.5) * window.innerWidth;
-                    const screenY = (-(playerPos.y * 0.5) + 0.5) * window.innerHeight;
-
-                    powerContainer.style.left = `${screenX}px`;
-                    powerContainer.style.top = `${screenY + 25}px`; 
-                } else {
-                    powerContainer.style.opacity = '0';
-                    powerBar.style.width = '0%';
-                }
-
-                // Update Ball Tracker Shadow & Drop Line
-                ballTrackerGroup.position.x = ball.position.x;
-                ballTrackerGroup.position.z = ball.position.z;
-
-                const linePositions = dropLine.geometry.attributes.position.array;
-                linePositions[0] = ball.position.x;
-                linePositions[1] = ball.position.y;
-                linePositions[2] = ball.position.z;
-                linePositions[3] = ball.position.x;
-                linePositions[4] = 0.02;
-                linePositions[5] = ball.position.z;
-                dropLine.geometry.attributes.position.needsUpdate = true;
-
-                // 3. CAMERA TRACKING
-                const camTargetX = playerGroup.position.x; 
-                const camTargetZ = 45 + (playerGroup.position.z * 0.2); 
-                
-                camera.position.x += (camTargetX - camera.position.x) * (3.0 * delta);
-                camera.position.y += (30 - camera.position.y) * (3.0 * delta);
-                camera.position.z += (camTargetZ - camera.position.z) * (3.0 * delta);
-                
-                const lookAtTarget = new THREE.Vector3(playerGroup.position.x, 0, playerGroup.position.z * 0.5);
-                if (!camera.userData.currentLookAt) camera.userData.currentLookAt = new THREE.Vector3().copy(lookAtTarget);
-                
-                camera.userData.currentLookAt.lerp(lookAtTarget, 3.0 * delta);
-                camera.lookAt(camera.userData.currentLookAt);
-
-                renderer.render(scene, camera);
-            }
-
-            // Handle Window Resize
-            window.addEventListener('resize', () => {
-                camera.aspect = window.innerWidth / window.innerHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(window.innerWidth, window.innerHeight);
-            }, false);
-
-            camera.position.set(0, 30, 45);
-            camera.userData.currentLookAt = new THREE.Vector3(0, 0, 0);
-
-            animate();
-        }
+        });
     </script>
 </body>
 </html>

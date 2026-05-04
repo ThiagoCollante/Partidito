@@ -1,84 +1,117 @@
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+const http = require('http').createServer(app);
+const io = require('socket.io')(http);
+const CANNON = require('cannon-es');
 
-// Serve the frontend game files from the "public" folder
 app.use(express.static('public'));
 
+// Almacenamos las salas y sus mundos físicos
 const rooms = {};
 
+function createRoom(roomId) {
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+    
+    // Suelo
+    const groundBody = new CANNON.Body({
+        type: CANNON.Body.STATIC,
+        shape: new CANNON.Plane()
+    });
+    groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    world.addBody(groundBody);
+
+    // Objeto físico de prueba (una caja interactuable)
+    const boxBody = new CANNON.Body({
+        mass: 5,
+        shape: new CANNON.Box(new CANNON.Vec3(1, 1, 1)),
+        position: new CANNON.Vec3(0, 5, 5)
+    });
+    world.addBody(boxBody);
+
+    rooms[roomId] = {
+        world,
+        players: {},
+        objects: { 'box1': boxBody }
+    };
+}
+
 io.on('connection', (socket) => {
-    // 1. Handle Room Creation
-    socket.on('create-room', (data) => {
-        const roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
-        rooms[roomCode] = { 
-            host: socket.id, 
-            players: {}, 
-            ball: { x: 5, y: 0.4, z: 2, vx: 0, vy: 0, vz: 0, possessor: null } 
-        };
-        socket.join(roomCode);
-        rooms[roomCode].players[socket.id] = { nickname: data.nickname, x: -20, y: 0, z: 0, rotX: 0, rotY: 0, timestamp: Date.now() };
+    socket.on('joinRoom', (roomId) => {
+        if (!rooms[roomId]) createRoom(roomId);
         
-        socket.emit('room-created', { roomCode, isHost: true, id: socket.id });
+        socket.join(roomId);
+        socket.roomId = roomId;
+
+        // Crear cuerpo físico para el jugador
+        const playerBody = new CANNON.Body({
+            mass: 1, // Masa 1 para que reaccione, o KINEMATIC si quieres control absoluto
+            shape: new CANNON.Sphere(1),
+            position: new CANNON.Vec3(Math.random() * 4 - 2, 2, 0),
+            linearDamping: 0.9 // Fricción del aire para frenar
+        });
+        rooms[roomId].world.addBody(playerBody);
+        rooms[roomId].players[socket.id] = playerBody;
+
+        // Informar a los demás
+        socket.broadcast.to(roomId).emit('playerJoined', socket.id);
     });
 
-    // 2. Handle Joining Rooms
-    socket.on('join-room', (data) => {
-        if (rooms[data.roomCode]) {
-            socket.join(data.roomCode);
-            rooms[data.roomCode].players[socket.id] = { nickname: data.nickname, x: 20, y: 0, z: 0, rotX: 0, rotY: 0, timestamp: Date.now() };
-            socket.emit('room-joined', { roomCode: data.roomCode, isHost: false, id: socket.id });
-        } else {
-            socket.emit('error', 'Room not found.');
-        }
+    socket.on('move', (input) => {
+        const room = rooms[socket.roomId];
+        if (!room || !room.players[socket.id]) return;
+
+        const body = room.players[socket.id];
+        const speed = 10;
+        
+        // Aplicar impulsos basados en el input del cliente
+        if (input.up) body.applyForce(new CANNON.Vec3(0, 0, -speed), body.position);
+        if (input.down) body.applyForce(new CANNON.Vec3(0, 0, speed), body.position);
+        if (input.left) body.applyForce(new CANNON.Vec3(-speed, 0, 0), body.position);
+        if (input.right) body.applyForce(new CANNON.Vec3(speed, 0, 0), body.position);
     });
 
-    // 3. Receive Player Updates
-    socket.on('player-update', (data) => {
-        const room = rooms[data.roomCode];
-        if (room && room.players[socket.id]) {
-            room.players[socket.id].x = data.x;
-            room.players[socket.id].y = data.y;
-            room.players[socket.id].z = data.z;
-            room.players[socket.id].rotX = data.rotX;
-            room.players[socket.id].rotY = data.rotY;
-            room.players[socket.id].timestamp = Date.now();
-        }
-    });
-
-    // 4. Receive Ball Updates
-    socket.on('ball-update', (data) => {
-        const room = rooms[data.roomCode];
-        if (room) {
-            room.ball.x = data.x; room.ball.y = data.y; room.ball.z = data.z;
-            room.ball.vx = data.vx; room.ball.vy = data.vy; room.ball.vz = data.vz;
-            room.ball.possessor = data.possessor;
-        }
-    });
-
-    // Handle Disconnects
     socket.on('disconnect', () => {
-        for (const roomCode in rooms) {
-            if (rooms[roomCode].players[socket.id]) {
-                delete rooms[roomCode].players[socket.id];
-            }
+        const room = rooms[socket.roomId];
+        if (room && room.players[socket.id]) {
+            room.world.removeBody(room.players[socket.id]);
+            delete room.players[socket.id];
+            io.to(socket.roomId).emit('playerLeft', socket.id);
         }
     });
 });
 
-// Broadcast Loop: Send state to all players 20 times per second
+// Bucle de físicas del servidor (Tickrate: 30 FPS)
 setInterval(() => {
-    for (const roomCode in rooms) {
-        io.to(roomCode).emit('sync-state', {
-            players: rooms[roomCode].players,
-            ball: rooms[roomCode].ball
-        });
+    for (const roomId in rooms) {
+        const room = rooms[roomId];
+        room.world.step(1 / 30); // Avanzar el mundo físico
+
+        // Recopilar estado para enviar a los clientes
+        const state = { players: {}, objects: {} };
+        
+        for (const id in room.players) {
+            state.players[id] = {
+                x: room.players[id].position.x,
+                y: room.players[id].position.y,
+                z: room.players[id].position.z
+            };
+        }
+        
+        for (const id in room.objects) {
+            state.objects[id] = {
+                x: room.objects[id].position.x,
+                y: room.objects[id].position.y,
+                z: room.objects[id].position.z,
+                qx: room.objects[id].quaternion.x,
+                qy: room.objects[id].quaternion.y,
+                qz: room.objects[id].quaternion.z,
+                qw: room.objects[id].quaternion.w,
+            };
+        }
+
+        io.to(roomId).emit('gameState', state);
     }
-}, 50);
+}, 1000 / 30);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Game Server running on port ${PORT}`));
+http.listen(PORT, () => console.log(`Server running on port ${PORT}`));

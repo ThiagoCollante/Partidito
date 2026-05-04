@@ -6,68 +6,82 @@ const CANNON = require('cannon-es');
 
 app.use(express.static('public'));
 
-// Almacenamos las salas y sus mundos físicos
 const rooms = {};
 
 function createRoom(roomId) {
     const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
     
-    // Suelo
+    // Material del suelo con un poco de fricción para los objetos sueltos
+    const groundMat = new CANNON.Material();
     const groundBody = new CANNON.Body({
         type: CANNON.Body.STATIC,
-        shape: new CANNON.Plane()
+        shape: new CANNON.Plane(),
+        material: groundMat
     });
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(groundBody);
 
-    // Objeto físico de prueba (una caja interactuable)
-    const boxBody = new CANNON.Body({
+    const objects = {};
+
+    // 1. La Caja Original
+    const box = new CANNON.Body({
         mass: 5,
         shape: new CANNON.Box(new CANNON.Vec3(1, 1, 1)),
-        position: new CANNON.Vec3(0, 5, 5)
+        position: new CANNON.Vec3(0, 5, -5)
     });
-    world.addBody(boxBody);
+    world.addBody(box);
+    objects['box1'] = { body: box, shape: 'box' };
 
-    rooms[roomId] = {
-        world,
-        players: {},
-        objects: { 'box1': boxBody }
-    };
+    // 2. La Esfera Nueva
+    const sphere = new CANNON.Body({
+        mass: 3,
+        shape: new CANNON.Sphere(1.5),
+        position: new CANNON.Vec3(5, 5, -5)
+    });
+    world.addBody(sphere);
+    objects['sphere1'] = { body: sphere, shape: 'sphere' };
+
+    // 3. La Pirámide Nueva (Cannon la simula como un Cilindro de 4 lados)
+    // Orientación especial porque Cannon crea cilindros apuntando hacia Z por defecto
+    const pyramidShape = new CANNON.Cylinder(0.01, 2, 3, 4); 
+    const pyramid = new CANNON.Body({
+        mass: 4,
+        shape: pyramidShape,
+        position: new CANNON.Vec3(-5, 5, -5)
+    });
+    // Rotar para que la punta mire hacia arriba (eje Y)
+    pyramid.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    world.addBody(pyramid);
+    objects['pyramid1'] = { body: pyramid, shape: 'pyramid' };
+
+    rooms[roomId] = { world, players: {}, objects };
 }
 
 io.on('connection', (socket) => {
     socket.on('joinRoom', (roomId) => {
         if (!rooms[roomId]) createRoom(roomId);
-        
         socket.join(roomId);
         socket.roomId = roomId;
 
-        // Crear cuerpo físico para el jugador
         const playerBody = new CANNON.Body({
-            mass: 1, // Masa 1 para que reaccione, o KINEMATIC si quieres control absoluto
+            mass: 2,
             shape: new CANNON.Sphere(1),
-            position: new CANNON.Vec3(Math.random() * 4 - 2, 2, 0),
-            linearDamping: 0.9 // Fricción del aire para frenar
+            position: new CANNON.Vec3(0, 2, 5),
+            fixedRotation: true // CRÍTICO: Evita que el jugador ruede como pelota
         });
+        playerBody.input = { keys: {}, yaw: 0 };
+        
         rooms[roomId].world.addBody(playerBody);
         rooms[roomId].players[socket.id] = playerBody;
-
-        // Informar a los demás
         socket.broadcast.to(roomId).emit('playerJoined', socket.id);
     });
 
-    socket.on('move', (input) => {
+    // En lugar de aplicar fuerza instantánea, guardamos el input y el ángulo de la cámara
+    socket.on('input', (data) => {
         const room = rooms[socket.roomId];
-        if (!room || !room.players[socket.id]) return;
-
-        const body = room.players[socket.id];
-        const speed = 10;
-        
-        // Aplicar impulsos basados en el input del cliente
-        if (input.up) body.applyForce(new CANNON.Vec3(0, 0, -speed), body.position);
-        if (input.down) body.applyForce(new CANNON.Vec3(0, 0, speed), body.position);
-        if (input.left) body.applyForce(new CANNON.Vec3(-speed, 0, 0), body.position);
-        if (input.right) body.applyForce(new CANNON.Vec3(speed, 0, 0), body.position);
+        if (room && room.players[socket.id]) {
+            room.players[socket.id].input = data;
+        }
     });
 
     socket.on('disconnect', () => {
@@ -80,32 +94,52 @@ io.on('connection', (socket) => {
     });
 });
 
-// Bucle de físicas del servidor (Tickrate: 30 FPS)
+// Bucle Físico del Servidor (30 FPS)
 setInterval(() => {
     for (const roomId in rooms) {
         const room = rooms[roomId];
-        room.world.step(1 / 30); // Avanzar el mundo físico
 
-        // Recopilar estado para enviar a los clientes
+        // Procesar movimiento "Kinematic-like" de los jugadores (Sin fricción resbaladiza)
+        for (const id in room.players) {
+            const body = room.players[id];
+            const input = body.input;
+            const speed = 12; // Velocidad del jugador
+
+            let vx = 0;
+            let vz = 0;
+
+            // Calcular dirección de movimiento en base hacia dónde mira la cámara (yaw)
+            if (input.keys.w) { vx -= Math.sin(input.yaw); vz -= Math.cos(input.yaw); }
+            if (input.keys.s) { vx += Math.sin(input.yaw); vz += Math.cos(input.yaw); }
+            if (input.keys.a) { vx -= Math.cos(input.yaw); vz += Math.sin(input.yaw); }
+            if (input.keys.d) { vx += Math.cos(input.yaw); vz -= Math.sin(input.yaw); }
+
+            // Normalizar vectores diagonales para no correr más rápido en diagonal
+            const length = Math.sqrt(vx * vx + vz * vz);
+            if (length > 0) {
+                vx = (vx / length) * speed;
+                vz = (vz / length) * speed;
+            }
+
+            // Aplicar velocidad X y Z directamente. La Y la controla la gravedad.
+            body.velocity.x = vx;
+            body.velocity.z = vz;
+        }
+
+        room.world.step(1 / 30);
+
         const state = { players: {}, objects: {} };
         
         for (const id in room.players) {
-            state.players[id] = {
-                x: room.players[id].position.x,
-                y: room.players[id].position.y,
-                z: room.players[id].position.z
-            };
+            state.players[id] = { x: room.players[id].position.x, y: room.players[id].position.y, z: room.players[id].position.z };
         }
         
         for (const id in room.objects) {
+            const obj = room.objects[id].body;
             state.objects[id] = {
-                x: room.objects[id].position.x,
-                y: room.objects[id].position.y,
-                z: room.objects[id].position.z,
-                qx: room.objects[id].quaternion.x,
-                qy: room.objects[id].quaternion.y,
-                qz: room.objects[id].quaternion.z,
-                qw: room.objects[id].quaternion.w,
+                shape: room.objects[id].shape, // Le decimos al cliente qué dibujar
+                x: obj.position.x, y: obj.position.y, z: obj.position.z,
+                qx: obj.quaternion.x, qy: obj.quaternion.y, qz: obj.quaternion.z, qw: obj.quaternion.w
             };
         }
 

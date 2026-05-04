@@ -2,28 +2,69 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Multijugador Físicas - Smooth Cam</title>
+    <title>Multijugador Físicas - Polish</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; }
+        body { margin: 0; overflow: hidden; background-color: #000; user-select: none; }
+        
+        /* Menú Inicial */
         #ui {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            z-index: 10; padding: 20px; background: rgba(0,0,0,0.8);
-            border-radius: 8px; text-align: center; color: white; font-family: sans-serif;
+            z-index: 10; padding: 25px; background: rgba(15, 15, 20, 0.9);
+            border-radius: 12px; text-align: center; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            box-shadow: 0px 8px 20px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
         }
-        input, button { padding: 10px; margin: 5px; font-size: 16px; cursor: pointer; }
+        input { padding: 12px; margin: 10px 0; font-size: 16px; width: 80%; border-radius: 6px; border: none; outline: none; }
+        button { padding: 12px 24px; font-size: 16px; cursor: pointer; background: #00ff88; color: black; border: none; border-radius: 6px; font-weight: bold; transition: transform 0.1s; }
+        button:active { transform: scale(0.95); }
+        
+        /* Mira central */
         #crosshair {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; font-size: 24px; font-family: sans-serif; display: none; pointer-events: none;
+            color: rgba(255,255,255,0.7); font-size: 20px; font-family: sans-serif; display: none; pointer-events: none;
+        }
+
+        /* HUD del Juego (Código de Sala y Controles) */
+        #gameHud {
+            display: none; position: absolute; top: 20px; left: 20px; z-index: 5;
+            color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .hud-panel {
+            background: rgba(0, 0, 0, 0.6); padding: 12px 18px; border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15); backdrop-filter: blur(4px);
+        }
+        .hotkey { background: #333; padding: 2px 6px; border-radius: 4px; border-bottom: 2px solid #111; font-size: 12px; font-family: monospace; }
+        
+        /* Animación de Copiado */
+        #copyToast {
+            opacity: 0; transform: translateY(-10px); transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            color: #00ff88; margin-top: 8px; font-weight: bold; font-size: 14px; text-shadow: 1px 1px 2px black;
         }
     </style>
 </head>
 <body>
+    <!-- Menú de entrada -->
     <div id="ui">
-        <h2>Ingresa a la Sala</h2>
-        <input type="text" id="roomCode" placeholder="Código" value="lobby1"><br>
-        <button onclick="joinRoom()">Unirse</button>
+        <h2 style="margin-top: 0;">Unirse a la partida</h2>
+        <input type="text" id="roomInput" placeholder="Código de la sala" value="SalaSecreta1">
+        <br>
+        <button onclick="joinRoom()">Entrar al Juego</button>
     </div>
-    <div id="crosshair">+</div> <!-- Mira central -->
+
+    <!-- HUD en Juego -->
+    <div id="gameHud">
+        <div class="hud-panel">
+            <div style="font-size: 14px; color: #bbb; margin-bottom: 4px;">SALA ACTUAL</div>
+            <div style="font-size: 22px; font-weight: bold; letter-spacing: 1px;" id="displayCode">---</div>
+            <div style="margin-top: 10px; font-size: 13px; color: #ccc;">
+                <span class="hotkey">C</span> Copiar Código<br>
+                <span class="hotkey">ESPACIO</span> Saltar
+            </div>
+        </div>
+        <div id="copyToast">¡Código copiado! ✓</div>
+    </div>
+
+    <div id="crosshair">✛</div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -32,30 +73,37 @@
         const socket = io();
         let myId = null;
         let isJoined = false;
+        let currentRoomCode = "";
 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x333344); 
-        scene.fog = new THREE.Fog(0x333344, 20, 100);
+        scene.background = new THREE.Color(0x1a1a24); 
+        scene.fog = new THREE.FogExp2(0x1a1a24, 0.02); // Niebla exponencial más suave
 
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.shadowMap.enabled = true; // Sombras activadas
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Sombras más suaves
         document.body.appendChild(renderer.domElement);
 
-        // Iluminación
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(10, 20, 10);
-        light.castShadow = true;
-        scene.add(light);
-        scene.add(new THREE.AmbientLight(0x606060));
+        // Iluminación mejorada
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+        
+        const dirLight = new THREE.DirectionalLight(0xffeedd, 0.8);
+        dirLight.position.set(15, 25, 10);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        scene.add(dirLight);
 
-        // Suelo estilo cuadrícula
-        const grid = new THREE.GridHelper(100, 50, 0x000000, 0x000000);
-        grid.material.opacity = 0.2;
+        // Suelo estético
+        const grid = new THREE.GridHelper(100, 50, 0x00ff88, 0xffffff);
+        grid.material.opacity = 0.1;
         grid.material.transparent = true;
         scene.add(grid);
-        const ground = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshLambertMaterial({ color: 0x888888 }));
+        
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 }));
         ground.rotation.x = -Math.PI / 2;
         ground.receiveShadow = true;
         scene.add(ground);
@@ -63,74 +111,89 @@
         const meshes = {};
         const targetStates = { players: {}, objects: {} };
 
-        // --- SISTEMA DE CÁMARA MOUSE (PointerLock) ---
-        let yaw = 0;   // Rotación Izquierda/Derecha
-        let pitch = 0; // Rotación Arriba/Abajo
+        let yaw = 0; let pitch = 0;
 
-        document.addEventListener('click', () => {
-            if (isJoined) document.body.requestPointerLock();
-        });
+        document.addEventListener('click', () => { if (isJoined) document.body.requestPointerLock(); });
 
         document.addEventListener('mousemove', (e) => {
             if (document.pointerLockElement === document.body) {
                 yaw -= e.movementX * 0.002;
                 pitch -= e.movementY * 0.002;
-                // Limitar para que no dé volteretas hacia atrás
                 pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch)); 
             }
         });
 
-        const keys = { w: false, s: false, a: false, d: false };
-        window.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
-        window.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
+        // Controles con Salto y Copiado
+        const keys = { w: false, s: false, a: false, d: false, space: false };
+        window.addEventListener('keydown', (e) => { 
+            if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; 
+            if(e.code === 'Space') keys.space = true;
+            
+            // UX Táctil: Copiar código con la 'C'
+            if(e.key.toLowerCase() === 'c' && isJoined) {
+                navigator.clipboard.writeText(currentRoomCode).then(() => {
+                    const toast = document.getElementById('copyToast');
+                    toast.style.opacity = 1;
+                    toast.style.transform = 'translateY(0px)';
+                    setTimeout(() => {
+                        toast.style.opacity = 0;
+                        toast.style.transform = 'translateY(-10px)';
+                    }, 2000);
+                });
+            }
+        });
+        window.addEventListener('keyup', (e) => { 
+            if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; 
+            if(e.code === 'Space') keys.space = false;
+        });
 
         socket.on('connect', () => { myId = socket.id; });
 
         window.joinRoom = () => {
-            const roomCode = document.getElementById('roomCode').value;
-            socket.emit('joinRoom', roomCode);
+            currentRoomCode = document.getElementById('roomInput').value;
+            socket.emit('joinRoom', currentRoomCode);
+            
+            // Cambiar UI
             document.getElementById('ui').style.display = 'none';
             document.getElementById('crosshair').style.display = 'block';
+            document.getElementById('gameHud').style.display = 'block';
+            document.getElementById('displayCode').innerText = currentRoomCode;
+            
             isJoined = true;
-            document.body.requestPointerLock(); // Bloquear cursor de inmediato
+            document.body.requestPointerLock();
         };
 
+        // Materiales mejorados
         const materials = {
-            player: new THREE.MeshLambertMaterial({ color: 0x00ff88 }),
-            other: new THREE.MeshLambertMaterial({ color: 0xff4444 }),
-            box: new THREE.MeshLambertMaterial({ color: 0x4488ff }),
-            sphere: new THREE.MeshLambertMaterial({ color: 0xff8800 }),
-            pyramid: new THREE.MeshLambertMaterial({ color: 0x9900ff })
+            player: new THREE.MeshStandardMaterial({ color: 0x00ff88, roughness: 0.3, metalness: 0.2 }),
+            other: new THREE.MeshStandardMaterial({ color: 0xff4444, roughness: 0.3, metalness: 0.2 }),
+            box: new THREE.MeshStandardMaterial({ color: 0x4488ff, roughness: 0.5 }),
+            sphere: new THREE.MeshStandardMaterial({ color: 0xffaa00, roughness: 0.2, metalness: 0.5 }),
+            pyramid: new THREE.MeshStandardMaterial({ color: 0x9900ff, roughness: 0.6 })
         };
 
         socket.on('gameState', (state) => {
             targetStates.players = state.players;
             targetStates.objects = state.objects;
 
-            // Dibujar Jugadores
             for (let id in state.players) {
                 if (!meshes[id]) {
                     const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), id === myId ? materials.player : materials.other);
-                    mesh.castShadow = true;
-                    scene.add(mesh);
-                    meshes[id] = mesh;
+                    mesh.castShadow = true; mesh.receiveShadow = true;
+                    scene.add(mesh); meshes[id] = mesh;
                 }
             }
 
-            // Dibujar Objetos según su forma (Caja, Esfera, Pirámide)
             for (let id in state.objects) {
                 if (!meshes[id]) {
-                    let geo;
-                    const shape = state.objects[id].shape;
-                    
+                    let geo; const shape = state.objects[id].shape;
                     if (shape === 'box') geo = new THREE.BoxGeometry(2, 2, 2);
                     else if (shape === 'sphere') geo = new THREE.SphereGeometry(1.5, 32, 32);
-                    else if (shape === 'pyramid') geo = new THREE.ConeGeometry(2, 3, 4); // Radio 2, Altura 3, 4 lados (Pirámide)
+                    else if (shape === 'pyramid') geo = new THREE.ConeGeometry(2, 3, 4);
 
                     const mesh = new THREE.Mesh(geo, materials[shape]);
-                    mesh.castShadow = true;
-                    scene.add(mesh);
-                    meshes[id] = mesh;
+                    mesh.castShadow = true; mesh.receiveShadow = true;
+                    scene.add(mesh); meshes[id] = mesh;
                 }
             }
         });
@@ -146,16 +209,12 @@
             requestAnimationFrame(animate);
 
             if (isJoined) {
-                // Enviar input Y EL ÁNGULO DE CÁMARA (Yaw) para saber hacia dónde caminar
                 socket.emit('input', { keys, yaw });
+                const lerpFactor = 0.3;
 
-                const lerpFactor = 0.3; // Suavidad de la red
-
-                // Interpolar Objetos y Jugadores
                 for (let id in targetStates.players) {
                     if (meshes[id]) {
-                        const targetPos = targetStates.players[id];
-                        tempVec.set(targetPos.x, targetPos.y, targetPos.z);
+                        tempVec.set(targetStates.players[id].x, targetStates.players[id].y, targetStates.players[id].z);
                         meshes[id].position.lerp(tempVec, lerpFactor);
                     }
                 }
@@ -170,23 +229,13 @@
                     }
                 }
 
-                // CÁMARA OVER-THE-SHOULDER INTERACTIVA CON MOUSE
                 if (meshes[myId]) {
                     const playerPos = meshes[myId].position;
-                    
-                    // 1. Calcular dónde debe ir la cámara orbitando la esfera
-                    const cameraDistance = 8;
-                    const offset = new THREE.Vector3(0, 2, cameraDistance); // 2 unidades arriba, 8 de distancia
-                    
-                    // Rotar el offset usando Euler (Pitch = Arriba/Abajo, Yaw = Izquierda/Derecha)
+                    const offset = new THREE.Vector3(0, 2, 8); 
                     offset.applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
                     
-                    // 2. Colocar la cámara y hacer que mire al jugador
                     camera.position.copy(playerPos).add(offset);
-                    
-                    // Hacer que la cámara mire un poco por encima de la cabeza del jugador
-                    const lookTarget = playerPos.clone().add(new THREE.Vector3(0, 1.5, 0));
-                    camera.lookAt(lookTarget);
+                    camera.lookAt(playerPos.clone().add(new THREE.Vector3(0, 1.5, 0)));
                 }
             }
 

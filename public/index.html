@@ -1,207 +1,238 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Multijugador Físicas - Polish</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Juego Multiplayer - Over The Shoulder</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; user-select: none; }
-        
-        /* Menú Inicial */
-        #ui {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            z-index: 10; padding: 25px; background: rgba(15, 15, 20, 0.9);
-            border-radius: 12px; text-align: center; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            box-shadow: 0px 8px 20px rgba(0,0,0,0.5);
-            border: 1px solid rgba(255,255,255,0.1);
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background-color: rgba(0, 0, 0, 0.8); color: white; z-index: 10; transition: opacity 0.3s ease;
         }
-        input { padding: 12px; margin: 10px 0; font-size: 16px; width: 80%; border-radius: 6px; border: none; outline: none; }
-        button { padding: 12px 24px; font-size: 16px; cursor: pointer; background: #00ff88; color: black; border: none; border-radius: 6px; font-weight: bold; transition: transform 0.1s; }
-        button:active { transform: scale(0.95); }
-        
-        /* Mira central */
-        #crosshair {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: rgba(255,255,255,0.7); font-size: 20px; font-family: sans-serif; display: none; pointer-events: none;
+        #ui-layer.hidden { opacity: 0; pointer-events: none; }
+
+        .btn-start {
+            padding: 15px 30px; font-size: 1.2rem; font-weight: bold; color: #fff; background-color: #0078d7;
+            border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: 0.2s; margin-top: 15px;
+        }
+        .btn-start:hover { background-color: #005a9e; transform: scale(1.05); }
+
+        .room-input {
+            padding: 12px; font-size: 1.1rem; border-radius: 8px; border: none; outline: none; text-align: center; width: 250px;
         }
 
-        /* HUD del Juego (Código de Sala y Controles) */
-        #gameHud {
-            display: none; position: absolute; top: 20px; left: 20px; z-index: 5;
-            color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .hud-panel {
-            background: rgba(0, 0, 0, 0.6); padding: 12px 18px; border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.15); backdrop-filter: blur(4px);
-        }
-        .hotkey { background: #333; padding: 2px 6px; border-radius: 4px; border-bottom: 2px solid #111; font-size: 12px; font-family: monospace; }
+        .instructions { margin-top: 20px; text-align: center; color: #ccc; }
         
-        /* Animación de Copiado */
-        #copyToast {
-            opacity: 0; transform: translateY(-10px); transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            color: #00ff88; margin-top: 8px; font-weight: bold; font-size: 14px; text-shadow: 1px 1px 2px black;
+        .crosshair {
+            position: absolute; top: 50%; left: 50%; width: 6px; height: 6px;
+            background-color: rgba(255, 255, 255, 0.7); border-radius: 50%;
+            transform: translate(-50%, -50%); z-index: 5; pointer-events: none; display: none;
         }
     </style>
-</head>
-<body>
-    <!-- Menú de entrada -->
-    <div id="ui">
-        <h2 style="margin-top: 0;">Unirse a la partida</h2>
-        <input type="text" id="roomInput" placeholder="Código de la sala" value="SalaSecreta1">
-        <br>
-        <button onclick="joinRoom()">Entrar al Juego</button>
-    </div>
-
-    <!-- HUD en Juego -->
-    <div id="gameHud">
-        <div class="hud-panel">
-            <div style="font-size: 14px; color: #bbb; margin-bottom: 4px;">SALA ACTUAL</div>
-            <div style="font-size: 22px; font-weight: bold; letter-spacing: 1px;" id="displayCode">---</div>
-            <div style="margin-top: 10px; font-size: 13px; color: #ccc;">
-                <span class="hotkey">C</span> Copiar Código<br>
-                <span class="hotkey">ESPACIO</span> Saltar
-            </div>
-        </div>
-        <div id="copyToast">¡Código copiado! ✓</div>
-    </div>
-
-    <div id="crosshair">✛</div>
-
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1 style="margin-bottom: 10px;">Lobby Multijugador</h1>
+        <input type="text" id="roomCode" class="room-input" value="Lobby1" placeholder="Código de la sala">
+        <button id="btn-start" class="btn-start">Unirse a la Partida</button>
+        <div class="instructions">
+            <p><strong>W, A, S, D</strong> - Moverse</p>
+            <p><strong>ESPACIO</strong> - Saltar</p>
+            <p><strong>Ratón</strong> - Mirar</p>
+            <p><strong>ESC</strong> - Pausar / Salir</p>
+        </div>
+    </div>
+
+    <div class="crosshair" id="crosshair"></div>
+    <div id="canvas-container"></div>
 
     <script>
         const socket = io();
         let myId = null;
         let isJoined = false;
-        let currentRoomCode = "";
 
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x1a1a24); 
-        scene.fog = new THREE.FogExp2(0x1a1a24, 0.02); // Niebla exponencial más suave
-
-        const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Sombras más suaves
-        document.body.appendChild(renderer.domElement);
-
-        // Iluminación mejorada
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-        scene.add(ambientLight);
+        let scene, camera, renderer;
         
-        const dirLight = new THREE.DirectionalLight(0xffeedd, 0.8);
-        dirLight.position.set(15, 25, 10);
-        dirLight.castShadow = true;
-        dirLight.shadow.mapSize.width = 1024;
-        dirLight.shadow.mapSize.height = 1024;
-        scene.add(dirLight);
-
-        // Suelo estético
-        const grid = new THREE.GridHelper(100, 50, 0x00ff88, 0xffffff);
-        grid.material.opacity = 0.1;
-        grid.material.transparent = true;
-        scene.add(grid);
-        
-        const ground = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 }));
-        ground.rotation.x = -Math.PI / 2;
-        ground.receiveShadow = true;
-        scene.add(ground);
-
-        const meshes = {};
+        // Almacenamiento Multijugador
+        const players = {}; // Diccionario con los THREE.Group de todos
+        const meshes = {};  // Diccionario para objetos y entornos
         const targetStates = { players: {}, objects: {} };
 
         let yaw = 0; let pitch = 0;
+        const mouseSensitivity = 0.002;
+        const keys = { w: false, a: false, s: false, d: false, space: false };
 
-        document.addEventListener('click', () => { if (isJoined) document.body.requestPointerLock(); });
+        const uiLayer = document.getElementById('ui-layer');
+        const btnStart = document.getElementById('btn-start');
+        const crosshair = document.getElementById('crosshair');
 
-        document.addEventListener('mousemove', (e) => {
-            if (document.pointerLockElement === document.body) {
-                yaw -= e.movementX * 0.002;
-                pitch -= e.movementY * 0.002;
-                pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch)); 
-            }
-        });
+        init();
+        animate();
 
-        // Controles con Salto y Copiado
-        const keys = { w: false, s: false, a: false, d: false, space: false };
-        window.addEventListener('keydown', (e) => { 
-            if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; 
-            if(e.code === 'Space') keys.space = true;
-            
-            // UX Táctil: Copiar código con la 'C'
-            if(e.key.toLowerCase() === 'c' && isJoined) {
-                navigator.clipboard.writeText(currentRoomCode).then(() => {
-                    const toast = document.getElementById('copyToast');
-                    toast.style.opacity = 1;
-                    toast.style.transform = 'translateY(0px)';
-                    setTimeout(() => {
-                        toast.style.opacity = 0;
-                        toast.style.transform = 'translateY(-10px)';
-                    }, 2000);
-                });
-            }
-        });
-        window.addEventListener('keyup', (e) => { 
-            if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; 
-            if(e.code === 'Space') keys.space = false;
-        });
+        function init() {
+            const container = document.getElementById('canvas-container');
 
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            scene.fog = new THREE.Fog(0x87ceeb, 10, 50);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(-10, 20, 10);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            scene.add(dirLight);
+
+            const gridHelper = new THREE.GridHelper(100, 100, 0x555555, 0xaaaaaa);
+            gridHelper.position.y = 0.01;
+            scene.add(gridHelper);
+
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 }));
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            configurarControles();
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // --- SISTEMA MULTIJUGADOR ---
         socket.on('connect', () => { myId = socket.id; });
 
-        window.joinRoom = () => {
-            currentRoomCode = document.getElementById('roomInput').value;
-            socket.emit('joinRoom', currentRoomCode);
+        // Convierte tu personaje en un prefab instanciable
+        function crearPersonaje(id) {
+            const character = new THREE.Group();
             
-            // Cambiar UI
-            document.getElementById('ui').style.display = 'none';
-            document.getElementById('crosshair').style.display = 'block';
-            document.getElementById('gameHud').style.display = 'block';
-            document.getElementById('displayCode').innerText = currentRoomCode;
-            
-            isJoined = true;
-            document.body.requestPointerLock();
-        };
+            const isMe = (id === myId);
+            const colorBody = isMe ? 0x0078d7 : 0xff3333; // Tú eres azul, los demás rojos
 
-        // Materiales mejorados
-        const materials = {
-            player: new THREE.MeshStandardMaterial({ color: 0x00ff88, roughness: 0.3, metalness: 0.2 }),
-            other: new THREE.MeshStandardMaterial({ color: 0xff4444, roughness: 0.3, metalness: 0.2 }),
-            box: new THREE.MeshStandardMaterial({ color: 0x4488ff, roughness: 0.5 }),
-            sphere: new THREE.MeshStandardMaterial({ color: 0xffaa00, roughness: 0.2, metalness: 0.5 }),
-            pyramid: new THREE.MeshStandardMaterial({ color: 0x9900ff, roughness: 0.6 })
-        };
+            const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 2, 16); 
+            const bodyMat = new THREE.MeshStandardMaterial({ color: colorBody, roughness: 0.4 });
+            const characterBody = new THREE.Mesh(bodyGeo, bodyMat);
+            characterBody.position.y = 1; 
+            characterBody.castShadow = true;
+            character.add(characterBody);
+
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.4, 0.6), new THREE.MeshStandardMaterial({ color: 0xeeeeee }));
+            head.position.set(0, 0.7, -0.2); 
+            characterBody.add(head);
+
+            const pack = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.3), new THREE.MeshStandardMaterial({ color: 0x004488 }));
+            pack.position.set(0, 0.1, 0.4);
+            characterBody.add(pack);
+
+            // Solo agregamos la cámara al jugador local
+            if (isMe) {
+                const cameraPivot = new THREE.Object3D();
+                cameraPivot.position.y = 1.5; 
+                character.add(cameraPivot);
+
+                camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
+                camera.position.set(0.8, 0.3, 2.5); 
+                cameraPivot.add(camera);
+
+                character.userData.cameraPivot = cameraPivot; // Guardar referencia para rotarlo
+            }
+
+            scene.add(character);
+            return character;
+        }
 
         socket.on('gameState', (state) => {
             targetStates.players = state.players;
             targetStates.objects = state.objects;
 
+            // Renderizar Jugadores
             for (let id in state.players) {
-                if (!meshes[id]) {
-                    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), id === myId ? materials.player : materials.other);
-                    mesh.castShadow = true; mesh.receiveShadow = true;
-                    scene.add(mesh); meshes[id] = mesh;
-                }
+                if (!players[id]) players[id] = crearPersonaje(id);
             }
 
+            // Renderizar Objetos dinámicos (Cajas del servidor)
             for (let id in state.objects) {
                 if (!meshes[id]) {
-                    let geo; const shape = state.objects[id].shape;
-                    if (shape === 'box') geo = new THREE.BoxGeometry(2, 2, 2);
-                    else if (shape === 'sphere') geo = new THREE.SphereGeometry(1.5, 32, 32);
-                    else if (shape === 'pyramid') geo = new THREE.ConeGeometry(2, 3, 4);
-
-                    const mesh = new THREE.Mesh(geo, materials[shape]);
+                    const objMat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
+                    const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), objMat);
                     mesh.castShadow = true; mesh.receiveShadow = true;
-                    scene.add(mesh); meshes[id] = mesh;
+                    scene.add(mesh);
+                    meshes[id] = mesh;
                 }
             }
         });
 
         socket.on('playerLeft', (id) => {
-            if (meshes[id]) { scene.remove(meshes[id]); delete meshes[id]; }
+            if (players[id]) { scene.remove(players[id]); delete players[id]; }
         });
 
+        // --- CONTROLES Y EVENTOS ---
+        function configurarControles() {
+            btnStart.addEventListener('click', () => {
+                if (!isJoined) {
+                    socket.emit('joinRoom', document.getElementById('roomCode').value);
+                    isJoined = true;
+                }
+                document.body.requestPointerLock();
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement === document.body) {
+                    uiLayer.classList.add('hidden');
+                    crosshair.style.display = 'block';
+                } else {
+                    uiLayer.classList.remove('hidden');
+                    crosshair.style.display = 'none';
+                    keys.w = keys.a = keys.s = keys.d = keys.space = false;
+                }
+            });
+
+            document.addEventListener('mousemove', (event) => {
+                if (document.pointerLockElement === document.body) {
+                    yaw -= event.movementX * mouseSensitivity;
+                    pitch -= event.movementY * mouseSensitivity;
+                    pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 4, pitch));
+
+                    if (players[myId]) {
+                        // Rotación instantánea local
+                        players[myId].rotation.y = yaw; 
+                        players[myId].userData.cameraPivot.rotation.x = pitch;
+                    }
+                }
+            });
+
+            window.addEventListener('keydown', (e) => { 
+                if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; 
+                if(e.code === 'Space') keys.space = true;
+            });
+            window.addEventListener('keyup', (e) => { 
+                if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; 
+                if(e.code === 'Space') keys.space = false;
+            });
+        }
+
+        function onWindowResize() {
+            if (camera) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+            }
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- BUCLE MULTIJUGADOR ---
         const tempVec = new THREE.Vector3();
         const tempQuat = new THREE.Quaternion();
 
@@ -209,16 +240,28 @@
             requestAnimationFrame(animate);
 
             if (isJoined) {
+                // 1. Enviar intención de movimiento al servidor
                 socket.emit('input', { keys, yaw });
+
                 const lerpFactor = 0.3;
 
+                // 2. Interpolar la posición de todos los jugadores
                 for (let id in targetStates.players) {
-                    if (meshes[id]) {
-                        tempVec.set(targetStates.players[id].x, targetStates.players[id].y, targetStates.players[id].z);
-                        meshes[id].position.lerp(tempVec, lerpFactor);
+                    if (players[id]) {
+                        const target = targetStates.players[id];
+                        tempVec.set(target.x, target.y, target.z);
+                        players[id].position.lerp(tempVec, lerpFactor);
+
+                        // Si es otro jugador, interpolar su rotación (yaw) para verlo girar
+                        if (id !== myId) {
+                            const euler = new THREE.Euler(0, target.yaw, 0);
+                            tempQuat.setFromEuler(euler);
+                            players[id].quaternion.slerp(tempQuat, lerpFactor);
+                        }
                     }
                 }
 
+                // 3. Interpolar cajas físicas
                 for (let id in targetStates.objects) {
                     if (meshes[id]) {
                         const target = targetStates.objects[id];
@@ -228,26 +271,10 @@
                         meshes[id].quaternion.slerp(tempQuat, lerpFactor);
                     }
                 }
-
-                if (meshes[myId]) {
-                    const playerPos = meshes[myId].position;
-                    const offset = new THREE.Vector3(0, 2, 8); 
-                    offset.applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
-                    
-                    camera.position.copy(playerPos).add(offset);
-                    camera.lookAt(playerPos.clone().add(new THREE.Vector3(0, 1.5, 0)));
-                }
             }
 
-            renderer.render(scene, camera);
+            if (camera) renderer.render(scene, camera);
         }
-        animate();
-
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
     </script>
 </body>
 </html>

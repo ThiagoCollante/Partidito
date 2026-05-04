@@ -3,160 +3,190 @@
 <head>
     <meta charset="UTF-8">
     <title>Juego Físicas Multiplayer</title>
-    <style>body { margin: 0; overflow: hidden; }</style>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        #ui {
+            position: absolute; 
+            top: 50%; left: 50%; 
+            transform: translate(-50%, -50%);
+            z-index: 10; 
+            padding: 20px; 
+            background: rgba(0,0,0,0.8);
+            border-radius: 8px;
+            text-align: center;
+            color: white;
+            font-family: sans-serif;
+        }
+        input, button { padding: 10px; margin: 5px; font-size: 16px; }
+        button { cursor: pointer; }
+    </style>
 </head>
 <body>
-    <div id="ui" style="position: absolute; z-index: 10; padding: 10px; color: white; background: rgba(0,0,0,0.5);">
+    <div id="ui">
+        <h2>Lobby Multiplayer</h2>
         <input type="text" id="roomCode" placeholder="Código de Sala" value="lobby1">
-        <button onclick="joinRoom()">Unirse</button>
+        <br>
+        <button onclick="joinRoom()">Unirse a la partida</button>
+        <p id="errorMsg" style="color: #ff5555; display: none; margin-top: 10px; font-weight: bold;"></p>
     </div>
 
-    <!-- Importar Three.js y Socket.io -->
+    <!-- Importar Socket.io y Three.js -->
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
     <script>
-        const socket = io();
-        let myId = null;
-        let isJoined = false;
+        // Sistema de seguridad: Avisar si se abrió con doble clic
+        if (typeof io === 'undefined') {
+            document.getElementById('errorMsg').innerText = "❌ Error de conexión: Debes entrar por http://localhost:3000, no abriendo el archivo localmente.";
+            document.getElementById('errorMsg').style.display = 'block';
+        } else {
+            const socket = io();
+            let myId = null;
+            let isJoined = false;
 
-        // --- Configuración Three.js ---
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
+            // --- Configuración Three.js ---
+            const scene = new THREE.Scene();
+            // Solución a la pantalla negra: Darle color al cielo
+            scene.background = new THREE.Color(0x87CEEB); 
 
-        // Iluminación
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5, 10, 5);
-        scene.add(light);
-        scene.add(new THREE.AmbientLight(0x404040));
+            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // Solución a la cámara: Posición inicial para el menú
+            camera.position.set(0, 10, 20);
+            camera.lookAt(0, 0, 0);
 
-        // Entorno visual
-        const groundGeo = new THREE.PlaneGeometry(100, 100);
-        const groundMat = new THREE.MeshLambertMaterial({ color: 0x228B22 });
-        const ground = new THREE.Mesh(groundGeo, groundMat);
-        ground.rotation.x = -Math.PI / 2;
-        scene.add(ground);
-
-        // Almacenamiento de mallas visuales y posiciones objetivo
-        const meshes = {};
-        const targetStates = { players: {}, objects: {} };
-
-        // Materiales
-        const playerMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
-        const otherPlayerMat = new THREE.MeshLambertMaterial({ color: 0x0000ff });
-        const boxMat = new THREE.MeshLambertMaterial({ color: 0xffff00 });
-
-        socket.on('connect', () => { myId = socket.id; });
-
-        window.joinRoom = () => {
-            const roomCode = document.getElementById('roomCode').value;
-            socket.emit('joinRoom', roomCode);
-            document.getElementById('ui').style.display = 'none';
-            isJoined = true;
-        };
-
-        // Recibir el estado del servidor (30 veces por segundo)
-        socket.on('gameState', (state) => {
-            // Actualizar posiciones objetivo (no movemos la malla inmediatamente)
-            targetStates.players = state.players;
-            targetStates.objects = state.objects;
-
-            // Instanciar jugadores nuevos
-            for (let id in state.players) {
-                if (!meshes[id]) {
-                    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), id === myId ? playerMat : otherPlayerMat);
-                    scene.add(mesh);
-                    meshes[id] = mesh;
-                }
-            }
-
-            // Instanciar objetos de físicas nuevos
-            for (let id in state.objects) {
-                if (!meshes[id]) {
-                    const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), boxMat); // Tamaño 2x2x2 porque Cannon usa half-extents
-                    scene.add(mesh);
-                    meshes[id] = mesh;
-                }
-            }
-        });
-
-        socket.on('playerLeft', (id) => {
-            if (meshes[id]) {
-                scene.remove(meshes[id]);
-                delete meshes[id];
-            }
-        });
-
-        // Controles locales
-        const keys = { up: false, down: false, left: false, right: false };
-        window.addEventListener('keydown', (e) => {
-            if(e.key === 'w') keys.up = true;
-            if(e.key === 's') keys.down = true;
-            if(e.key === 'a') keys.left = true;
-            if(e.key === 'd') keys.right = true;
-        });
-        window.addEventListener('keyup', (e) => {
-            if(e.key === 'w') keys.up = false;
-            if(e.key === 's') keys.down = false;
-            if(e.key === 'a') keys.left = false;
-            if(e.key === 'd') keys.right = false;
-        });
-
-        // --- Bucle Render Cliente (60+ FPS) ---
-        function animate() {
-            requestAnimationFrame(animate);
-
-            if (isJoined) {
-                // Enviar input al servidor continuamente
-                socket.emit('move', keys);
-
-                // INTERPOLACIÓN (El secreto de la suavidad)
-                const lerpFactor = 0.2; // Qué tan rápido se suaviza (0 a 1)
-
-                for (let id in targetStates.players) {
-                    if (meshes[id]) {
-                        const targetPos = targetStates.players[id];
-                        meshes[id].position.lerp(new THREE.Vector3(targetPos.x, targetPos.y, targetPos.z), lerpFactor);
-                    }
-                }
-
-                for (let id in targetStates.objects) {
-                    if (meshes[id]) {
-                        const target = targetStates.objects[id];
-                        meshes[id].position.lerp(new THREE.Vector3(target.x, target.y, target.z), lerpFactor);
-                        
-                        // Para rotaciones físicas suaves, usamos slerp (Spherical Lerp)
-                        const targetQuat = new THREE.Quaternion(target.qx, target.qy, target.qz, target.qw);
-                        meshes[id].quaternion.slerp(targetQuat, lerpFactor);
-                    }
-                }
-
-                // CÁMARA OVER-THE-SHOULDER
-                if (meshes[myId]) {
-                    const playerPos = meshes[myId].position;
-                    
-                    // Posición deseada: detrás, arriba y un poco a la derecha del jugador
-                    const offset = new THREE.Vector3(2, 4, 8); 
-                    const targetCamPos = playerPos.clone().add(offset);
-                    
-                    // Suavizar también el movimiento de la cámara para que no maree
-                    camera.position.lerp(targetCamPos, 0.1);
-                    camera.lookAt(playerPos);
-                }
-            }
-
-            renderer.render(scene, camera);
-        }
-        animate();
-
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-        });
+            document.body.appendChild(renderer.domElement);
+
+            // Iluminación
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(5, 10, 5);
+            scene.add(light);
+            scene.add(new THREE.AmbientLight(0x404040));
+
+            // Suelo
+            const groundGeo = new THREE.PlaneGeometry(100, 100);
+            const groundMat = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            scene.add(ground);
+
+            const meshes = {};
+            const targetStates = { players: {}, objects: {} };
+
+            const playerMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+            const otherPlayerMat = new THREE.MeshLambertMaterial({ color: 0x0000ff });
+            const boxMat = new THREE.MeshLambertMaterial({ color: 0xffff00 });
+
+            socket.on('connect', () => { 
+                myId = socket.id; 
+                document.getElementById('errorMsg').style.display = 'none';
+            });
+
+            window.joinRoom = () => {
+                if (!myId) return; // Evita errores si aún no conecta
+                const roomCode = document.getElementById('roomCode').value;
+                socket.emit('joinRoom', roomCode);
+                document.getElementById('ui').style.display = 'none';
+                isJoined = true;
+            };
+
+            socket.on('gameState', (state) => {
+                targetStates.players = state.players;
+                targetStates.objects = state.objects;
+
+                for (let id in state.players) {
+                    if (!meshes[id]) {
+                        const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), id === myId ? playerMat : otherPlayerMat);
+                        scene.add(mesh);
+                        meshes[id] = mesh;
+                    }
+                }
+
+                for (let id in state.objects) {
+                    if (!meshes[id]) {
+                        const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), boxMat);
+                        scene.add(mesh);
+                        meshes[id] = mesh;
+                    }
+                }
+            });
+
+            socket.on('playerLeft', (id) => {
+                if (meshes[id]) {
+                    scene.remove(meshes[id]);
+                    delete meshes[id];
+                }
+            });
+
+            // Controles
+            const keys = { up: false, down: false, left: false, right: false };
+            window.addEventListener('keydown', (e) => {
+                if(e.key.toLowerCase() === 'w') keys.up = true;
+                if(e.key.toLowerCase() === 's') keys.down = true;
+                if(e.key.toLowerCase() === 'a') keys.left = true;
+                if(e.key.toLowerCase() === 'd') keys.right = true;
+            });
+            window.addEventListener('keyup', (e) => {
+                if(e.key.toLowerCase() === 'w') keys.up = false;
+                if(e.key.toLowerCase() === 's') keys.down = false;
+                if(e.key.toLowerCase() === 'a') keys.left = false;
+                if(e.key.toLowerCase() === 'd') keys.right = false;
+            });
+
+            // Reutilización de vectores para evitar pérdidas de memoria (optimización de render)
+            const tempVec = new THREE.Vector3();
+            const tempQuat = new THREE.Quaternion();
+
+            function animate() {
+                requestAnimationFrame(animate);
+
+                if (isJoined) {
+                    socket.emit('move', keys);
+                    const lerpFactor = 0.2;
+
+                    for (let id in targetStates.players) {
+                        if (meshes[id]) {
+                            const targetPos = targetStates.players[id];
+                            tempVec.set(targetPos.x, targetPos.y, targetPos.z);
+                            meshes[id].position.lerp(tempVec, lerpFactor);
+                        }
+                    }
+
+                    for (let id in targetStates.objects) {
+                        if (meshes[id]) {
+                            const target = targetStates.objects[id];
+                            
+                            // Interpolación de posición
+                            tempVec.set(target.x, target.y, target.z);
+                            meshes[id].position.lerp(tempVec, lerpFactor);
+                            
+                            // Interpolación de rotación (físicas suaves)
+                            tempQuat.set(target.qx, target.qy, target.qz, target.qw);
+                            meshes[id].quaternion.slerp(tempQuat, lerpFactor);
+                        }
+                    }
+
+                    // Cámara Over-The-Shoulder
+                    if (meshes[myId]) {
+                        const playerPos = meshes[myId].position;
+                        // Posición: Atrás y arriba
+                        tempVec.set(playerPos.x, playerPos.y + 4, playerPos.z + 8);
+                        camera.position.lerp(tempVec, 0.1);
+                        camera.lookAt(playerPos);
+                    }
+                }
+
+                renderer.render(scene, camera);
+            }
+            animate();
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
     </script>
 </body>
 </html>

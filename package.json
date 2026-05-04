@@ -1,12 +1,12 @@
 {
-  "name": "pro-soccer-online",
+  "name": "multiplayer-physics",
   "version": "1.0.0",
-  "description": "Multiplayer Game Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "cannon-es": "^0.20.0",
     "express": "^4.18.2",
     "socket.io": "^4.7.2"
   }

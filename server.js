@@ -16,11 +16,10 @@ function createRoom(roomId) {
 
     const objects = {};
 
-    // Cajas de obstáculos esparcidas (Físicas del servidor)
     for (let i = 0; i < 15; i++) {
         const x = (Math.random() - 0.5) * 40;
         const z = (Math.random() - 0.5) * 40;
-        if (Math.abs(x) < 5 && Math.abs(z) < 5) continue; // Despejar el centro
+        if (Math.abs(x) < 5 && Math.abs(z) < 5) continue; 
 
         const box = new CANNON.Body({ mass: 2, shape: new CANNON.Box(new CANNON.Vec3(1, 1, 1)), position: new CANNON.Vec3(x, 2, z) });
         world.addBody(box); 
@@ -36,13 +35,12 @@ io.on('connection', (socket) => {
         socket.join(roomId);
         socket.roomId = roomId;
 
-        // El jugador es una cápsula/esfera física de radio 0.5 (coincide con tu cilindro)
         const playerBody = new CANNON.Body({
             mass: 2,
             shape: new CANNON.Sphere(0.5),
             position: new CANNON.Vec3((Math.random() - 0.5) * 4, 2, (Math.random() - 0.5) * 4),
             fixedRotation: true,
-            linearDamping: 0.9 // Fricción suave
+            linearDamping: 0.0 // <-- ¡CRÍTICO! Desactivamos la fricción por defecto de Cannon
         });
         playerBody.input = { keys: {}, yaw: 0 };
         
@@ -72,32 +70,38 @@ setInterval(() => {
     for (const roomId in rooms) {
         const room = rooms[roomId];
 
-        // Lógica de movimiento con aceleración transferida desde tu código cliente
         for (const id in room.players) {
             const body = room.players[id];
             const input = body.input;
             
-            const speedMultiplayer = 30.0;
+            // --- TU SISTEMA DE INERCIA Y FRICCIÓN ---
             const delta = 1 / 30; // Tickrate
-            let moveX = 0; let moveZ = 0;
+            const friction = 10.0; // Desaceleración al soltar la tecla
+            const speedMultiplier = 80.0; // Fuerza de empuje
 
+            // 1. Aplicar tu fricción manual solo a X y Z (No a la Y por la gravedad)
+            body.velocity.x -= body.velocity.x * friction * delta;
+            body.velocity.z -= body.velocity.z * friction * delta;
+
+            // 2. Calcular dirección de las teclas
+            let moveX = 0; let moveZ = 0;
             if (input.keys.w) { moveZ -= 1; }
             if (input.keys.s) { moveZ += 1; }
             if (input.keys.a) { moveX -= 1; }
             if (input.keys.d) { moveX += 1; }
 
-            // Normalizar diagonales
             const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
             if (length > 0) { moveX /= length; moveZ /= length; }
 
-            // Aplicar rotación de cámara (yaw) al vector de movimiento
+            // 3. Rotar según hacia donde mire la cámara
             const rotMoveX = moveX * Math.cos(input.yaw) + moveZ * Math.sin(input.yaw);
             const rotMoveZ = -moveX * Math.sin(input.yaw) + moveZ * Math.cos(input.yaw);
 
-            body.velocity.x += rotMoveX * speedMultiplayer * delta;
-            body.velocity.z += rotMoveZ * speedMultiplayer * delta;
+            // 4. Aplicar la aceleración
+            body.velocity.x += rotMoveX * speedMultiplier * delta;
+            body.velocity.z += rotMoveZ * speedMultiplier * delta;
 
-            // Salto
+            // Salto (solo si la velocidad en Y es casi nula, o sea, está en el suelo)
             if (input.keys.space && Math.abs(body.velocity.y) < 0.1) {
                 body.velocity.y = 8;
             }
@@ -111,9 +115,9 @@ setInterval(() => {
             const body = room.players[id];
             state.players[id] = { 
                 x: body.position.x, 
-                y: body.position.y - 0.5, // Restamos 0.5 para que los pies de tu cilindro toquen el suelo
+                y: body.position.y - 0.5, 
                 z: body.position.z,
-                yaw: body.input.yaw // Enviamos a dónde mira a los demás
+                yaw: body.input.yaw 
             };
         }
         

@@ -2,191 +2,203 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Juego Físicas Multiplayer</title>
+    <title>Multijugador Físicas - Smooth Cam</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; }
         #ui {
-            position: absolute; 
-            top: 50%; left: 50%; 
-            transform: translate(-50%, -50%);
-            z-index: 10; 
-            padding: 20px; 
-            background: rgba(0,0,0,0.8);
-            border-radius: 8px;
-            text-align: center;
-            color: white;
-            font-family: sans-serif;
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            z-index: 10; padding: 20px; background: rgba(0,0,0,0.8);
+            border-radius: 8px; text-align: center; color: white; font-family: sans-serif;
         }
-        input, button { padding: 10px; margin: 5px; font-size: 16px; }
-        button { cursor: pointer; }
+        input, button { padding: 10px; margin: 5px; font-size: 16px; cursor: pointer; }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-size: 24px; font-family: sans-serif; display: none; pointer-events: none;
+        }
     </style>
 </head>
 <body>
     <div id="ui">
-        <h2>Lobby Multiplayer</h2>
-        <input type="text" id="roomCode" placeholder="Código de Sala" value="lobby1">
-        <br>
-        <button onclick="joinRoom()">Unirse a la partida</button>
-        <p id="errorMsg" style="color: #ff5555; display: none; margin-top: 10px; font-weight: bold;"></p>
+        <h2>Ingresa a la Sala</h2>
+        <input type="text" id="roomCode" placeholder="Código" value="lobby1"><br>
+        <button onclick="joinRoom()">Unirse</button>
     </div>
+    <div id="crosshair">+</div> <!-- Mira central -->
 
-    <!-- Importar Socket.io y Three.js -->
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
     <script>
-        // Sistema de seguridad: Avisar si se abrió con doble clic
-        if (typeof io === 'undefined') {
-            document.getElementById('errorMsg').innerText = "❌ Error de conexión: Debes entrar por http://localhost:3000, no abriendo el archivo localmente.";
-            document.getElementById('errorMsg').style.display = 'block';
-        } else {
-            const socket = io();
-            let myId = null;
-            let isJoined = false;
+        const socket = io();
+        let myId = null;
+        let isJoined = false;
 
-            // --- Configuración Three.js ---
-            const scene = new THREE.Scene();
-            // Solución a la pantalla negra: Darle color al cielo
-            scene.background = new THREE.Color(0x87CEEB); 
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x333344); 
+        scene.fog = new THREE.Fog(0x333344, 20, 100);
 
-            const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            // Solución a la cámara: Posición inicial para el menú
-            camera.position.set(0, 10, 20);
-            camera.lookAt(0, 0, 0);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true; // Sombras activadas
+        document.body.appendChild(renderer.domElement);
 
-            const renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
+        // Iluminación
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(10, 20, 10);
+        light.castShadow = true;
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x606060));
 
-            // Iluminación
-            const light = new THREE.DirectionalLight(0xffffff, 1);
-            light.position.set(5, 10, 5);
-            scene.add(light);
-            scene.add(new THREE.AmbientLight(0x404040));
+        // Suelo estilo cuadrícula
+        const grid = new THREE.GridHelper(100, 50, 0x000000, 0x000000);
+        grid.material.opacity = 0.2;
+        grid.material.transparent = true;
+        scene.add(grid);
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshLambertMaterial({ color: 0x888888 }));
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
 
-            // Suelo
-            const groundGeo = new THREE.PlaneGeometry(100, 100);
-            const groundMat = new THREE.MeshLambertMaterial({ color: 0x228B22 });
-            const ground = new THREE.Mesh(groundGeo, groundMat);
-            ground.rotation.x = -Math.PI / 2;
-            scene.add(ground);
+        const meshes = {};
+        const targetStates = { players: {}, objects: {} };
 
-            const meshes = {};
-            const targetStates = { players: {}, objects: {} };
+        // --- SISTEMA DE CÁMARA MOUSE (PointerLock) ---
+        let yaw = 0;   // Rotación Izquierda/Derecha
+        let pitch = 0; // Rotación Arriba/Abajo
 
-            const playerMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
-            const otherPlayerMat = new THREE.MeshLambertMaterial({ color: 0x0000ff });
-            const boxMat = new THREE.MeshLambertMaterial({ color: 0xffff00 });
+        document.addEventListener('click', () => {
+            if (isJoined) document.body.requestPointerLock();
+        });
 
-            socket.on('connect', () => { 
-                myId = socket.id; 
-                document.getElementById('errorMsg').style.display = 'none';
-            });
-
-            window.joinRoom = () => {
-                if (!myId) return; // Evita errores si aún no conecta
-                const roomCode = document.getElementById('roomCode').value;
-                socket.emit('joinRoom', roomCode);
-                document.getElementById('ui').style.display = 'none';
-                isJoined = true;
-            };
-
-            socket.on('gameState', (state) => {
-                targetStates.players = state.players;
-                targetStates.objects = state.objects;
-
-                for (let id in state.players) {
-                    if (!meshes[id]) {
-                        const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), id === myId ? playerMat : otherPlayerMat);
-                        scene.add(mesh);
-                        meshes[id] = mesh;
-                    }
-                }
-
-                for (let id in state.objects) {
-                    if (!meshes[id]) {
-                        const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), boxMat);
-                        scene.add(mesh);
-                        meshes[id] = mesh;
-                    }
-                }
-            });
-
-            socket.on('playerLeft', (id) => {
-                if (meshes[id]) {
-                    scene.remove(meshes[id]);
-                    delete meshes[id];
-                }
-            });
-
-            // Controles
-            const keys = { up: false, down: false, left: false, right: false };
-            window.addEventListener('keydown', (e) => {
-                if(e.key.toLowerCase() === 'w') keys.up = true;
-                if(e.key.toLowerCase() === 's') keys.down = true;
-                if(e.key.toLowerCase() === 'a') keys.left = true;
-                if(e.key.toLowerCase() === 'd') keys.right = true;
-            });
-            window.addEventListener('keyup', (e) => {
-                if(e.key.toLowerCase() === 'w') keys.up = false;
-                if(e.key.toLowerCase() === 's') keys.down = false;
-                if(e.key.toLowerCase() === 'a') keys.left = false;
-                if(e.key.toLowerCase() === 'd') keys.right = false;
-            });
-
-            // Reutilización de vectores para evitar pérdidas de memoria (optimización de render)
-            const tempVec = new THREE.Vector3();
-            const tempQuat = new THREE.Quaternion();
-
-            function animate() {
-                requestAnimationFrame(animate);
-
-                if (isJoined) {
-                    socket.emit('move', keys);
-                    const lerpFactor = 0.2;
-
-                    for (let id in targetStates.players) {
-                        if (meshes[id]) {
-                            const targetPos = targetStates.players[id];
-                            tempVec.set(targetPos.x, targetPos.y, targetPos.z);
-                            meshes[id].position.lerp(tempVec, lerpFactor);
-                        }
-                    }
-
-                    for (let id in targetStates.objects) {
-                        if (meshes[id]) {
-                            const target = targetStates.objects[id];
-                            
-                            // Interpolación de posición
-                            tempVec.set(target.x, target.y, target.z);
-                            meshes[id].position.lerp(tempVec, lerpFactor);
-                            
-                            // Interpolación de rotación (físicas suaves)
-                            tempQuat.set(target.qx, target.qy, target.qz, target.qw);
-                            meshes[id].quaternion.slerp(tempQuat, lerpFactor);
-                        }
-                    }
-
-                    // Cámara Over-The-Shoulder
-                    if (meshes[myId]) {
-                        const playerPos = meshes[myId].position;
-                        // Posición: Atrás y arriba
-                        tempVec.set(playerPos.x, playerPos.y + 4, playerPos.z + 8);
-                        camera.position.lerp(tempVec, 0.1);
-                        camera.lookAt(playerPos);
-                    }
-                }
-
-                renderer.render(scene, camera);
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === document.body) {
+                yaw -= e.movementX * 0.002;
+                pitch -= e.movementY * 0.002;
+                // Limitar para que no dé volteretas hacia atrás
+                pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch)); 
             }
-            animate();
+        });
 
-            window.addEventListener('resize', () => {
-                camera.aspect = window.innerWidth / window.innerHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(window.innerWidth, window.innerHeight);
-            });
+        const keys = { w: false, s: false, a: false, d: false };
+        window.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
+
+        socket.on('connect', () => { myId = socket.id; });
+
+        window.joinRoom = () => {
+            const roomCode = document.getElementById('roomCode').value;
+            socket.emit('joinRoom', roomCode);
+            document.getElementById('ui').style.display = 'none';
+            document.getElementById('crosshair').style.display = 'block';
+            isJoined = true;
+            document.body.requestPointerLock(); // Bloquear cursor de inmediato
+        };
+
+        const materials = {
+            player: new THREE.MeshLambertMaterial({ color: 0x00ff88 }),
+            other: new THREE.MeshLambertMaterial({ color: 0xff4444 }),
+            box: new THREE.MeshLambertMaterial({ color: 0x4488ff }),
+            sphere: new THREE.MeshLambertMaterial({ color: 0xff8800 }),
+            pyramid: new THREE.MeshLambertMaterial({ color: 0x9900ff })
+        };
+
+        socket.on('gameState', (state) => {
+            targetStates.players = state.players;
+            targetStates.objects = state.objects;
+
+            // Dibujar Jugadores
+            for (let id in state.players) {
+                if (!meshes[id]) {
+                    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), id === myId ? materials.player : materials.other);
+                    mesh.castShadow = true;
+                    scene.add(mesh);
+                    meshes[id] = mesh;
+                }
+            }
+
+            // Dibujar Objetos según su forma (Caja, Esfera, Pirámide)
+            for (let id in state.objects) {
+                if (!meshes[id]) {
+                    let geo;
+                    const shape = state.objects[id].shape;
+                    
+                    if (shape === 'box') geo = new THREE.BoxGeometry(2, 2, 2);
+                    else if (shape === 'sphere') geo = new THREE.SphereGeometry(1.5, 32, 32);
+                    else if (shape === 'pyramid') geo = new THREE.ConeGeometry(2, 3, 4); // Radio 2, Altura 3, 4 lados (Pirámide)
+
+                    const mesh = new THREE.Mesh(geo, materials[shape]);
+                    mesh.castShadow = true;
+                    scene.add(mesh);
+                    meshes[id] = mesh;
+                }
+            }
+        });
+
+        socket.on('playerLeft', (id) => {
+            if (meshes[id]) { scene.remove(meshes[id]); delete meshes[id]; }
+        });
+
+        const tempVec = new THREE.Vector3();
+        const tempQuat = new THREE.Quaternion();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isJoined) {
+                // Enviar input Y EL ÁNGULO DE CÁMARA (Yaw) para saber hacia dónde caminar
+                socket.emit('input', { keys, yaw });
+
+                const lerpFactor = 0.3; // Suavidad de la red
+
+                // Interpolar Objetos y Jugadores
+                for (let id in targetStates.players) {
+                    if (meshes[id]) {
+                        const targetPos = targetStates.players[id];
+                        tempVec.set(targetPos.x, targetPos.y, targetPos.z);
+                        meshes[id].position.lerp(tempVec, lerpFactor);
+                    }
+                }
+
+                for (let id in targetStates.objects) {
+                    if (meshes[id]) {
+                        const target = targetStates.objects[id];
+                        tempVec.set(target.x, target.y, target.z);
+                        meshes[id].position.lerp(tempVec, lerpFactor);
+                        tempQuat.set(target.qx, target.qy, target.qz, target.qw);
+                        meshes[id].quaternion.slerp(tempQuat, lerpFactor);
+                    }
+                }
+
+                // CÁMARA OVER-THE-SHOULDER INTERACTIVA CON MOUSE
+                if (meshes[myId]) {
+                    const playerPos = meshes[myId].position;
+                    
+                    // 1. Calcular dónde debe ir la cámara orbitando la esfera
+                    const cameraDistance = 8;
+                    const offset = new THREE.Vector3(0, 2, cameraDistance); // 2 unidades arriba, 8 de distancia
+                    
+                    // Rotar el offset usando Euler (Pitch = Arriba/Abajo, Yaw = Izquierda/Derecha)
+                    offset.applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+                    
+                    // 2. Colocar la cámara y hacer que mire al jugador
+                    camera.position.copy(playerPos).add(offset);
+                    
+                    // Hacer que la cámara mire un poco por encima de la cabeza del jugador
+                    const lookTarget = playerPos.clone().add(new THREE.Vector3(0, 1.5, 0));
+                    camera.lookAt(lookTarget);
+                }
+            }
+
+            renderer.render(scene, camera);
         }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
     </script>
 </body>
 </html>

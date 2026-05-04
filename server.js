@@ -5,33 +5,27 @@ const io = require('socket.io')(http);
 const CANNON = require('cannon-es');
 
 app.use(express.static('public'));
-
 const rooms = {};
 
 function createRoom(roomId) {
-    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -15, 0) }); // Gravedad un poco más fuerte para saltos menos "lunares"
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -15, 0) });
     
-    const groundMat = new CANNON.Material();
-    const groundBody = new CANNON.Body({
-        type: CANNON.Body.STATIC,
-        shape: new CANNON.Plane(),
-        material: groundMat
-    });
+    const groundBody = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(groundBody);
 
     const objects = {};
 
-    const box = new CANNON.Body({ mass: 5, shape: new CANNON.Box(new CANNON.Vec3(1, 1, 1)), position: new CANNON.Vec3(0, 5, -5) });
-    world.addBody(box); objects['box1'] = { body: box, shape: 'box' };
+    // Cajas de obstáculos esparcidas (Físicas del servidor)
+    for (let i = 0; i < 15; i++) {
+        const x = (Math.random() - 0.5) * 40;
+        const z = (Math.random() - 0.5) * 40;
+        if (Math.abs(x) < 5 && Math.abs(z) < 5) continue; // Despejar el centro
 
-    const sphere = new CANNON.Body({ mass: 3, shape: new CANNON.Sphere(1.5), position: new CANNON.Vec3(5, 5, -5) });
-    world.addBody(sphere); objects['sphere1'] = { body: sphere, shape: 'sphere' };
-
-    const pyramidShape = new CANNON.Cylinder(0.01, 2, 3, 4); 
-    const pyramid = new CANNON.Body({ mass: 4, shape: pyramidShape, position: new CANNON.Vec3(-5, 5, -5) });
-    pyramid.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-    world.addBody(pyramid); objects['pyramid1'] = { body: pyramid, shape: 'pyramid' };
+        const box = new CANNON.Body({ mass: 2, shape: new CANNON.Box(new CANNON.Vec3(1, 1, 1)), position: new CANNON.Vec3(x, 2, z) });
+        world.addBody(box); 
+        objects[`box_${i}`] = { body: box, shape: 'box' };
+    }
 
     rooms[roomId] = { world, players: {}, objects };
 }
@@ -42,11 +36,13 @@ io.on('connection', (socket) => {
         socket.join(roomId);
         socket.roomId = roomId;
 
+        // El jugador es una cápsula/esfera física de radio 0.5 (coincide con tu cilindro)
         const playerBody = new CANNON.Body({
             mass: 2,
-            shape: new CANNON.Sphere(1),
-            position: new CANNON.Vec3((Math.random() - 0.5) * 4, 2, 5), // Spawn un poco aleatorio
-            fixedRotation: true
+            shape: new CANNON.Sphere(0.5),
+            position: new CANNON.Vec3((Math.random() - 0.5) * 4, 2, (Math.random() - 0.5) * 4),
+            fixedRotation: true,
+            linearDamping: 0.9 // Fricción suave
         });
         playerBody.input = { keys: {}, yaw: 0 };
         
@@ -76,31 +72,34 @@ setInterval(() => {
     for (const roomId in rooms) {
         const room = rooms[roomId];
 
+        // Lógica de movimiento con aceleración transferida desde tu código cliente
         for (const id in room.players) {
             const body = room.players[id];
             const input = body.input;
-            const speed = 14; 
+            
+            const speedMultiplayer = 30.0;
+            const delta = 1 / 30; // Tickrate
+            let moveX = 0; let moveZ = 0;
 
-            let vx = 0;
-            let vz = 0;
+            if (input.keys.w) { moveZ -= 1; }
+            if (input.keys.s) { moveZ += 1; }
+            if (input.keys.a) { moveX -= 1; }
+            if (input.keys.d) { moveX += 1; }
 
-            if (input.keys.w) { vx -= Math.sin(input.yaw); vz -= Math.cos(input.yaw); }
-            if (input.keys.s) { vx += Math.sin(input.yaw); vz += Math.cos(input.yaw); }
-            if (input.keys.a) { vx -= Math.cos(input.yaw); vz += Math.sin(input.yaw); }
-            if (input.keys.d) { vx += Math.cos(input.yaw); vz -= Math.sin(input.yaw); }
+            // Normalizar diagonales
+            const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
+            if (length > 0) { moveX /= length; moveZ /= length; }
 
-            const length = Math.sqrt(vx * vx + vz * vz);
-            if (length > 0) {
-                vx = (vx / length) * speed;
-                vz = (vz / length) * speed;
-            }
+            // Aplicar rotación de cámara (yaw) al vector de movimiento
+            const rotMoveX = moveX * Math.cos(input.yaw) + moveZ * Math.sin(input.yaw);
+            const rotMoveZ = -moveX * Math.sin(input.yaw) + moveZ * Math.cos(input.yaw);
 
-            body.velocity.x = vx;
-            body.velocity.z = vz;
+            body.velocity.x += rotMoveX * speedMultiplayer * delta;
+            body.velocity.z += rotMoveZ * speedMultiplayer * delta;
 
-            // Lógica de Salto (Si toca el piso y apreta espacio)
+            // Salto
             if (input.keys.space && Math.abs(body.velocity.y) < 0.1) {
-                body.velocity.y = 8; // Fuerza hacia arriba
+                body.velocity.y = 8;
             }
         }
 
@@ -109,7 +108,13 @@ setInterval(() => {
         const state = { players: {}, objects: {} };
         
         for (const id in room.players) {
-            state.players[id] = { x: room.players[id].position.x, y: room.players[id].position.y, z: room.players[id].position.z };
+            const body = room.players[id];
+            state.players[id] = { 
+                x: body.position.x, 
+                y: body.position.y - 0.5, // Restamos 0.5 para que los pies de tu cilindro toquen el suelo
+                z: body.position.z,
+                yaw: body.input.yaw // Enviamos a dónde mira a los demás
+            };
         }
         
         for (const id in room.objects) {

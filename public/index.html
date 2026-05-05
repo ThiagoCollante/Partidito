@@ -22,7 +22,7 @@
         .btn-start:hover { background-color: #005a9e; transform: scale(1.05); }
 
         .room-input {
-            padding: 12px; font-size: 1.1rem; border-radius: 8px; border: none; outline: none; text-align: center; width: 250px;
+            padding: 12px; font-size: 1.1rem; border-radius: 8px; border: none; outline: none; text-align: center; width: 250px; margin-bottom: 10px;
         }
 
         .instructions { margin-top: 20px; text-align: center; color: #ccc; }
@@ -40,7 +40,10 @@
 
     <div id="ui-layer">
         <h1 style="margin-bottom: 10px;">Lobby Multijugador</h1>
+        <!-- Novedad: Input de Nickname -->
+        <input type="text" id="nicknameInput" class="room-input" placeholder="Tu Nombre" maxlength="12">
         <input type="text" id="roomCode" class="room-input" value="Lobby1" placeholder="Código de la sala">
+        
         <button id="btn-start" class="btn-start">Unirse a la Partida</button>
         <div class="instructions">
             <p><strong>W, A, S, D</strong> - Moverse</p>
@@ -60,9 +63,8 @@
 
         let scene, camera, renderer;
         
-        // Almacenamiento Multijugador
-        const players = {}; // Diccionario con los THREE.Group de todos
-        const meshes = {};  // Diccionario para objetos y entornos
+        const players = {}; 
+        const meshes = {};  
         const targetStates = { players: {}, objects: {} };
 
         let yaw = 0; let pitch = 0;
@@ -112,15 +114,41 @@
             window.addEventListener('resize', onWindowResize);
         }
 
-        // --- SISTEMA MULTIJUGADOR ---
         socket.on('connect', () => { myId = socket.id; });
 
-        // Convierte tu personaje en un prefab instanciable
-        function crearPersonaje(id) {
+        // 1. Creador de Texto (Sprites)
+        function crearTextoSala(mensaje) {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = 256;
+            canvas.height = 128;
+
+            context.font = "Bold 32px Arial";
+            context.textAlign = "center";
+            
+            // Borde oscuro para que se lea en el cielo brillante
+            context.fillStyle = "rgba(0,0,0,0.8)";
+            context.fillText(mensaje, 130, 66);
+            
+            // Texto blanco
+            context.fillStyle = "white";
+            context.fillText(mensaje, 128, 64);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false }); // depthTest false hace que no atraviese objetos extrañamente
+            const sprite = new THREE.Sprite(spriteMaterial);
+            
+            sprite.scale.set(3, 1.5, 1);
+            sprite.position.y = 2.4; // Altura: justo por encima del jugador
+            return sprite;
+        }
+
+        // 2. Modificamos crearPersonaje para aceptar y mostrar el nickname
+        function crearPersonaje(id, nickname) {
             const character = new THREE.Group();
             
             const isMe = (id === myId);
-            const colorBody = isMe ? 0x0078d7 : 0xff3333; // Tú eres azul, los demás rojos
+            const colorBody = isMe ? 0x0078d7 : 0xff3333; 
 
             const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 2, 16); 
             const bodyMat = new THREE.MeshStandardMaterial({ color: colorBody, roughness: 0.4 });
@@ -137,7 +165,11 @@
             pack.position.set(0, 0.1, 0.4);
             characterBody.add(pack);
 
-            // Solo agregamos la cámara al jugador local
+            // Agregar Nombre arriba (Sprite)
+            const nombreMostrar = nickname || "Anónimo";
+            const cartelNombre = crearTextoSala(nombreMostrar);
+            character.add(cartelNombre); // Los sprites en ThreeJS siempre miran solos a la cámara!
+
             if (isMe) {
                 const cameraPivot = new THREE.Object3D();
                 cameraPivot.position.y = 1.5; 
@@ -147,7 +179,7 @@
                 camera.position.set(0.8, 0.3, 2.5); 
                 cameraPivot.add(camera);
 
-                character.userData.cameraPivot = cameraPivot; // Guardar referencia para rotarlo
+                character.userData.cameraPivot = cameraPivot; 
             }
 
             scene.add(character);
@@ -158,12 +190,11 @@
             targetStates.players = state.players;
             targetStates.objects = state.objects;
 
-            // Renderizar Jugadores
             for (let id in state.players) {
-                if (!players[id]) players[id] = crearPersonaje(id);
+                // Pasamos el nickname extraido del estado del servidor
+                if (!players[id]) players[id] = crearPersonaje(id, state.players[id].nickname);
             }
 
-            // Renderizar Objetos dinámicos (Cajas del servidor)
             for (let id in state.objects) {
                 if (!meshes[id]) {
                     const objMat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
@@ -179,11 +210,14 @@
             if (players[id]) { scene.remove(players[id]); delete players[id]; }
         });
 
-        // --- CONTROLES Y EVENTOS ---
         function configurarControles() {
             btnStart.addEventListener('click', () => {
                 if (!isJoined) {
-                    socket.emit('joinRoom', document.getElementById('roomCode').value);
+                    const roomCode = document.getElementById('roomCode').value;
+                    const nickname = document.getElementById('nicknameInput').value || "Invitado";
+                    
+                    // Novedad: Enviamos un Objeto con la sala y el nombre
+                    socket.emit('joinRoom', { roomId: roomCode, nickname: nickname });
                     isJoined = true;
                 }
                 document.body.requestPointerLock();
@@ -207,7 +241,6 @@
                     pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 4, pitch));
 
                     if (players[myId]) {
-                        // Rotación instantánea local
                         players[myId].rotation.y = yaw; 
                         players[myId].userData.cameraPivot.rotation.x = pitch;
                     }
@@ -232,7 +265,6 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
 
-        // --- BUCLE MULTIJUGADOR ---
         const tempVec = new THREE.Vector3();
         const tempQuat = new THREE.Quaternion();
 
@@ -240,19 +272,15 @@
             requestAnimationFrame(animate);
 
             if (isJoined) {
-                // 1. Enviar intención de movimiento al servidor
                 socket.emit('input', { keys, yaw });
-
                 const lerpFactor = 0.3;
 
-                // 2. Interpolar la posición de todos los jugadores
                 for (let id in targetStates.players) {
                     if (players[id]) {
                         const target = targetStates.players[id];
                         tempVec.set(target.x, target.y, target.z);
                         players[id].position.lerp(tempVec, lerpFactor);
 
-                        // Si es otro jugador, interpolar su rotación (yaw) para verlo girar
                         if (id !== myId) {
                             const euler = new THREE.Euler(0, target.yaw, 0);
                             tempQuat.setFromEuler(euler);
@@ -261,7 +289,6 @@
                     }
                 }
 
-                // 3. Interpolar cajas físicas
                 for (let id in targetStates.objects) {
                     if (meshes[id]) {
                         const target = targetStates.objects[id];

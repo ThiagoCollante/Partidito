@@ -10,7 +10,20 @@ const rooms = {};
 function createRoom(roomId) {
     const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -15, 0) });
     
-    const groundBody = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
+    // 1. CREAR MATERIAL SIN FRICCIÓN PARA EL MUNDO
+    const slipperyMaterial = new CANNON.Material('slippery');
+    const slipperyContact = new CANNON.ContactMaterial(slipperyMaterial, slipperyMaterial, {
+        friction: 0.0,  // Cero fricción física, nosotros la controlamos en el código
+        restitution: 0.0 // Cero rebote
+    });
+    world.addContactMaterial(slipperyContact);
+
+    // Aplicar el material resbaladizo al suelo
+    const groundBody = new CANNON.Body({ 
+        type: CANNON.Body.STATIC, 
+        shape: new CANNON.Plane(),
+        material: slipperyMaterial
+    });
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(groundBody);
 
@@ -21,31 +34,39 @@ function createRoom(roomId) {
         const z = (Math.random() - 0.5) * 40;
         if (Math.abs(x) < 5 && Math.abs(z) < 5) continue; 
 
+        // A las cajas no les ponemos el slipperyMaterial para que se puedan empujar de forma realista
         const box = new CANNON.Body({ mass: 2, shape: new CANNON.Box(new CANNON.Vec3(1, 1, 1)), position: new CANNON.Vec3(x, 2, z) });
         world.addBody(box); 
         objects[`box_${i}`] = { body: box, shape: 'box' };
     }
 
-    rooms[roomId] = { world, players: {}, objects };
+    rooms[roomId] = { world, players: {}, objects, slipperyMaterial };
 }
 
 io.on('connection', (socket) => {
-    socket.on('joinRoom', (roomId) => {
+    // 2. RECIBIR EL NICKNAME DESDE EL CLIENTE
+    socket.on('joinRoom', (data) => {
+        const roomId = data.roomId;
         if (!rooms[roomId]) createRoom(roomId);
         socket.join(roomId);
         socket.roomId = roomId;
+
+        const room = rooms[roomId];
 
         const playerBody = new CANNON.Body({
             mass: 2,
             shape: new CANNON.Sphere(0.5),
             position: new CANNON.Vec3((Math.random() - 0.5) * 4, 2, (Math.random() - 0.5) * 4),
             fixedRotation: true,
-            linearDamping: 0.0 // <-- ¡CRÍTICO! Desactivamos la fricción por defecto de Cannon
+            linearDamping: 0.0,
+            material: room.slipperyMaterial // Aplicar el material al jugador
         });
-        playerBody.input = { keys: {}, yaw: 0 };
         
-        rooms[roomId].world.addBody(playerBody);
-        rooms[roomId].players[socket.id] = playerBody;
+        playerBody.input = { keys: {}, yaw: 0 };
+        playerBody.nickname = data.nickname; // Guardar el nombre en el cuerpo del jugador
+        
+        room.world.addBody(playerBody);
+        room.players[socket.id] = playerBody;
         socket.broadcast.to(roomId).emit('playerJoined', socket.id);
     });
 
@@ -74,16 +95,13 @@ setInterval(() => {
             const body = room.players[id];
             const input = body.input;
             
-            // --- TU SISTEMA DE INERCIA Y FRICCIÓN ---
-            const delta = 1 / 30; // Tickrate
-            const friction = 10.0; // Desaceleración al soltar la tecla
-            const speedMultiplier = 80.0; // Fuerza de empuje
+            const delta = 1 / 30; 
+            const friction = 10.0; 
+            const speedMultiplier = 80.0; 
 
-            // 1. Aplicar tu fricción manual solo a X y Z (No a la Y por la gravedad)
             body.velocity.x -= body.velocity.x * friction * delta;
             body.velocity.z -= body.velocity.z * friction * delta;
 
-            // 2. Calcular dirección de las teclas
             let moveX = 0; let moveZ = 0;
             if (input.keys.w) { moveZ -= 1; }
             if (input.keys.s) { moveZ += 1; }
@@ -93,15 +111,12 @@ setInterval(() => {
             const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
             if (length > 0) { moveX /= length; moveZ /= length; }
 
-            // 3. Rotar según hacia donde mire la cámara
             const rotMoveX = moveX * Math.cos(input.yaw) + moveZ * Math.sin(input.yaw);
             const rotMoveZ = -moveX * Math.sin(input.yaw) + moveZ * Math.cos(input.yaw);
 
-            // 4. Aplicar la aceleración
             body.velocity.x += rotMoveX * speedMultiplier * delta;
             body.velocity.z += rotMoveZ * speedMultiplier * delta;
 
-            // Salto (solo si la velocidad en Y es casi nula, o sea, está en el suelo)
             if (input.keys.space && Math.abs(body.velocity.y) < 0.1) {
                 body.velocity.y = 8;
             }
@@ -117,7 +132,8 @@ setInterval(() => {
                 x: body.position.x, 
                 y: body.position.y - 0.5, 
                 z: body.position.z,
-                yaw: body.input.yaw 
+                yaw: body.input.yaw,
+                nickname: body.nickname // Mandar el nickname a todos
             };
         }
         

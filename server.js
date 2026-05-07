@@ -27,13 +27,11 @@ function createRoom(roomId) {
 
     const objects = {};
 
-    // AHORA SON PELOTAS (Esferas)
     for (let i = 0; i < 15; i++) {
         const x = (Math.random() - 0.5) * 40;
         const z = (Math.random() - 0.5) * 40;
         if (Math.abs(x) < 5 && Math.abs(z) < 5) continue; 
 
-        // Radio 1, masa 2
         const sphere = new CANNON.Body({ mass: 2, shape: new CANNON.Sphere(1), position: new CANNON.Vec3(x, 2, z) });
         world.addBody(sphere); 
         objects[`ball_${i}`] = { body: sphere, shape: 'sphere' };
@@ -75,45 +73,45 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- SISTEMA DE FLING RADIAL CENTRADO EN EL JUGADOR ---
+    // --- NUEVO SISTEMA DE FLING 3D REALISTA ---
     socket.on('attack', () => {
         const room = rooms[socket.roomId];
         if (!room || !room.players[socket.id]) return;
 
         const playerBody = room.players[socket.id];
-        
-        // Radio de detección (tu hitbox + margen para atrapar la pelota)
         const hitboxRadius = 2.5; 
 
         for (const objId in room.objects) {
             const objBody = room.objects[objId].body;
             
-            // Vector desde el jugador hacia el objeto
+            // 1. Vector 3D exacto desde el jugador al objeto (incluyendo la Y)
             const dx = objBody.position.x - playerBody.position.x;
             const dy = objBody.position.y - playerBody.position.y;
             const dz = objBody.position.z - playerBody.position.z;
             
-            // Distancia absoluta
+            // 2. Distancia tridimensional
             const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-            // Si está dentro de la burbuja del jugador
             if (dist <= hitboxRadius) {
                 objBody.wakeUp();
 
-                // Calcular vector horizontal y normalizarlo (para que salga hacia AFUERA desde el jugador)
-                const horizontalDist = Math.sqrt(dx*dx + dz*dz);
-                let normX = 0; let normZ = 0;
+                // 3. Normalización 3D: Convertimos la distancia en una dirección pura (valores de -1 a 1 en todos los ejes)
+                let normX = 0; let normY = 0; let normZ = 0;
                 
-                if (horizontalDist > 0) {
-                    normX = dx / horizontalDist;
-                    normZ = dz / horizontalDist;
+                if (dist > 0) {
+                    normX = dx / dist;
+                    normY = dy / dist;
+                    normZ = dz / dist;
                 }
 
-                // APLICAR FUERZA HACIA AFUERA
-                objBody.velocity.x = normX * 35; // Fling horizontal en el ángulo correcto
-                objBody.velocity.y = 12;         // Salto hacia arriba
-                objBody.velocity.z = normZ * 35; // Fling horizontal en el ángulo correcto
+                // 4. Aplicar la fuerza usando la dirección exacta calculada
+                const flingForce = 45; // Subí un poco la fuerza para compensar
                 
+                objBody.velocity.x = normX * flingForce;
+                objBody.velocity.y = normY * flingForce;
+                objBody.velocity.z = normZ * flingForce;
+                
+                // Rotación aleatoria al impacto
                 objBody.angularVelocity.set(
                     (Math.random() - 0.5) * 20,
                     (Math.random() - 0.5) * 20,

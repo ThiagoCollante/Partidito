@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Juego Multiplayer - Area Radial</title>
+    <title>Juego Multiplayer - La Gran Habitación</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; display: block; }
@@ -83,7 +83,7 @@
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x87ceeb);
-            scene.fog = new THREE.Fog(0x87ceeb, 10, 50);
+            scene.fog = new THREE.Fog(0x87ceeb, 10, 80);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -99,16 +99,58 @@
             dirLight.castShadow = true;
             dirLight.shadow.mapSize.width = 2048;
             dirLight.shadow.mapSize.height = 2048;
+            // Ampliar el área de sombras para cubrir toda la habitación
+            dirLight.shadow.camera.left = -30;
+            dirLight.shadow.camera.right = 30;
+            dirLight.shadow.camera.top = 30;
+            dirLight.shadow.camera.bottom = -30;
             scene.add(dirLight);
 
-            const gridHelper = new THREE.GridHelper(100, 100, 0x555555, 0xaaaaaa);
+            // --- CONSTRUCCIÓN VISUAL DE LA HABITACIÓN (50x50) ---
+            const roomSize = 50;
+            const wallHeight = 20;
+
+            const gridHelper = new THREE.GridHelper(roomSize, 25, 0x555555, 0xaaaaaa);
             gridHelper.position.y = 0.01;
             scene.add(gridHelper);
 
-            const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 }));
+            // Suelo
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 });
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize, roomSize), floorMat);
             floor.rotation.x = -Math.PI / 2;
             floor.receiveShadow = true;
             scene.add(floor);
+
+            // Material para las paredes
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x556677, roughness: 0.9 });
+            const wallGeoX = new THREE.PlaneGeometry(roomSize, wallHeight);
+            
+            // Pared Norte
+            const wallN = new THREE.Mesh(wallGeoX, wallMat);
+            wallN.position.set(0, wallHeight/2, -roomSize/2);
+            wallN.receiveShadow = true;
+            scene.add(wallN);
+
+            // Pared Sur
+            const wallS = new THREE.Mesh(wallGeoX, wallMat);
+            wallS.position.set(0, wallHeight/2, roomSize/2);
+            wallS.rotation.y = Math.PI;
+            wallS.receiveShadow = true;
+            scene.add(wallS);
+
+            // Pared Este
+            const wallE = new THREE.Mesh(wallGeoX, wallMat);
+            wallE.position.set(roomSize/2, wallHeight/2, 0);
+            wallE.rotation.y = -Math.PI / 2;
+            wallE.receiveShadow = true;
+            scene.add(wallE);
+
+            // Pared Oeste
+            const wallW = new THREE.Mesh(wallGeoX, wallMat);
+            wallW.position.set(-roomSize/2, wallHeight/2, 0);
+            wallW.rotation.y = Math.PI / 2;
+            wallW.receiveShadow = true;
+            scene.add(wallW);
 
             configurarControles();
             window.addEventListener('resize', onWindowResize);
@@ -144,7 +186,6 @@
             const isMe = (id === myId);
             const colorBody = isMe ? 0x0078d7 : 0xff3333; 
 
-            // Cuerpo del jugador
             const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 2, 16); 
             const bodyMat = new THREE.MeshStandardMaterial({ color: colorBody, roughness: 0.4 });
             const characterBody = new THREE.Mesh(bodyGeo, bodyMat);
@@ -164,8 +205,6 @@
             const cartelNombre = crearTextoSala(nombreMostrar);
             character.add(cartelNombre); 
 
-            // --- NUEVA HITBOX CILÍNDRICA (Envuelve al jugador) ---
-            // Radio 0.8 (más ancho), Altura 2.4 (más alto)
             const hitboxGeo = new THREE.CylinderGeometry(0.8, 0.8, 2.4, 16);
             const hitboxMat = new THREE.MeshBasicMaterial({ 
                 color: 0xff4444, 
@@ -175,7 +214,7 @@
                 wireframe: true 
             });
             const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
-            hitbox.position.set(0, 1, 0); // Está en la posición 0 respecto al personaje (lo envuelve)
+            hitbox.position.set(0, 1, 0);
             character.add(hitbox);
             
             character.userData.hitboxMat = hitboxMat;
@@ -206,13 +245,14 @@
 
             for (let id in state.objects) {
                 if (!meshes[id]) {
-                    // AHORA RENDERIZA ESFERAS (Pelotas)
-                    const objMat = new THREE.MeshStandardMaterial({ color: 0xffa500, roughness: 0.3 });
-                    // SphereGeometry(radio, segmentosX, segmentosY)
-                    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), objMat);
-                    mesh.castShadow = true; mesh.receiveShadow = true;
-                    scene.add(mesh);
-                    meshes[id] = mesh;
+                    // --- NUEVO: RENDER DE PELOTA PEQUEÑA ---
+                    if (state.objects[id].shape === 'small_sphere') {
+                        const objMat = new THREE.MeshStandardMaterial({ color: 0x00ff88, roughness: 0.2, metalness: 0.5 }); // Color llamativo
+                        const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), objMat); // Radio 0.5
+                        mesh.castShadow = true; mesh.receiveShadow = true;
+                        scene.add(mesh);
+                        meshes[id] = mesh;
+                    }
                 }
             }
         });

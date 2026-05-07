@@ -17,6 +17,7 @@ function createRoom(roomId) {
     });
     world.addContactMaterial(slipperyContact);
 
+    // Suelo
     const groundBody = new CANNON.Body({ 
         type: CANNON.Body.STATIC, 
         shape: new CANNON.Plane(),
@@ -25,17 +26,39 @@ function createRoom(roomId) {
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(groundBody);
 
+    // --- NUEVO: PAREDES DE LA HABITACIÓN (50x50) ---
+    const roomSize = 50;
+    const wallThickness = 4; // Paredes gruesas para que la pelota no las atraviese a gran velocidad
+    const wallHeight = 20;
+
+    const wallShapeX = new CANNON.Box(new CANNON.Vec3(wallThickness/2, wallHeight/2, roomSize/2));
+    const wallShapeZ = new CANNON.Box(new CANNON.Vec3(roomSize/2, wallHeight/2, wallThickness/2));
+
+    // Norte y Sur
+    const wallN = new CANNON.Body({ type: CANNON.Body.STATIC, shape: wallShapeZ, position: new CANNON.Vec3(0, wallHeight/2, roomSize/2), material: slipperyMaterial });
+    const wallS = new CANNON.Body({ type: CANNON.Body.STATIC, shape: wallShapeZ, position: new CANNON.Vec3(0, wallHeight/2, -roomSize/2), material: slipperyMaterial });
+    // Este y Oeste
+    const wallE = new CANNON.Body({ type: CANNON.Body.STATIC, shape: wallShapeX, position: new CANNON.Vec3(roomSize/2, wallHeight/2, 0), material: slipperyMaterial });
+    const wallW = new CANNON.Body({ type: CANNON.Body.STATIC, shape: wallShapeX, position: new CANNON.Vec3(-roomSize/2, wallHeight/2, 0), material: slipperyMaterial });
+
+    world.addBody(wallN); world.addBody(wallS); world.addBody(wallE); world.addBody(wallW);
+
     const objects = {};
 
-    for (let i = 0; i < 15; i++) {
-        const x = (Math.random() - 0.5) * 40;
-        const z = (Math.random() - 0.5) * 40;
-        if (Math.abs(x) < 5 && Math.abs(z) < 5) continue; 
-
-        const sphere = new CANNON.Body({ mass: 2, shape: new CANNON.Sphere(1), position: new CANNON.Vec3(x, 2, z) });
-        world.addBody(sphere); 
-        objects[`ball_${i}`] = { body: sphere, shape: 'sphere' };
-    }
+    // --- NUEVO: UNA SOLA PELOTA PEQUEÑA ---
+    // Radio de 0.5 (la mitad que antes), masa 1
+    const smallBall = new CANNON.Body({ 
+        mass: 1, 
+        shape: new CANNON.Sphere(0.5), 
+        position: new CANNON.Vec3(0, 2, -5) 
+    });
+    // Le damos un poco de rebote a la pelota para que sea divertido contra las paredes
+    const bouncyMaterial = new CANNON.Material();
+    world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, bouncyMaterial, { friction: 0.2, restitution: 0.8 }));
+    smallBall.material = bouncyMaterial;
+    
+    world.addBody(smallBall); 
+    objects[`main_ball`] = { body: smallBall, shape: 'small_sphere' }; // Etiqueta nueva
 
     rooms[roomId] = { world, players: {}, objects, slipperyMaterial };
 }
@@ -52,7 +75,7 @@ io.on('connection', (socket) => {
         const playerBody = new CANNON.Body({
             mass: 2,
             shape: new CANNON.Sphere(0.5),
-            position: new CANNON.Vec3((Math.random() - 0.5) * 4, 2, (Math.random() - 0.5) * 4),
+            position: new CANNON.Vec3((Math.random() - 0.5) * 10, 2, (Math.random() - 0.5) * 10), // Spawn más controlado
             fixedRotation: true,
             linearDamping: 0.0,
             material: room.slipperyMaterial 
@@ -73,7 +96,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- NUEVO SISTEMA DE FLING 3D REALISTA ---
     socket.on('attack', () => {
         const room = rooms[socket.roomId];
         if (!room || !room.players[socket.id]) return;
@@ -84,18 +106,15 @@ io.on('connection', (socket) => {
         for (const objId in room.objects) {
             const objBody = room.objects[objId].body;
             
-            // 1. Vector 3D exacto desde el jugador al objeto (incluyendo la Y)
             const dx = objBody.position.x - playerBody.position.x;
             const dy = objBody.position.y - playerBody.position.y;
             const dz = objBody.position.z - playerBody.position.z;
             
-            // 2. Distancia tridimensional
             const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
             if (dist <= hitboxRadius) {
                 objBody.wakeUp();
 
-                // 3. Normalización 3D: Convertimos la distancia en una dirección pura (valores de -1 a 1 en todos los ejes)
                 let normX = 0; let normY = 0; let normZ = 0;
                 
                 if (dist > 0) {
@@ -104,14 +123,13 @@ io.on('connection', (socket) => {
                     normZ = dz / dist;
                 }
 
-                // 4. Aplicar la fuerza usando la dirección exacta calculada
-                const flingForce = 45; // Subí un poco la fuerza para compensar
+                // Fuerza ajustada para la pelota que ahora es más ligera
+                const flingForce = 35; 
                 
                 objBody.velocity.x = normX * flingForce;
                 objBody.velocity.y = normY * flingForce;
                 objBody.velocity.z = normZ * flingForce;
                 
-                // Rotación aleatoria al impacto
                 objBody.angularVelocity.set(
                     (Math.random() - 0.5) * 20,
                     (Math.random() - 0.5) * 20,

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Juego Multiplayer - Over The Shoulder</title>
+    <title>Juego Multiplayer - Hitbox</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; display: block; }
@@ -40,7 +40,6 @@
 
     <div id="ui-layer">
         <h1 style="margin-bottom: 10px;">Lobby Multijugador</h1>
-        <!-- Novedad: Input de Nickname -->
         <input type="text" id="nicknameInput" class="room-input" placeholder="Tu Nombre" maxlength="12">
         <input type="text" id="roomCode" class="room-input" value="Lobby1" placeholder="Código de la sala">
         
@@ -48,6 +47,7 @@
         <div class="instructions">
             <p><strong>W, A, S, D</strong> - Moverse</p>
             <p><strong>ESPACIO</strong> - Saltar</p>
+            <p><strong>CLICK IZQUIERDO</strong> - Fling! (Lanzar objetos)</p>
             <p><strong>Ratón</strong> - Mirar</p>
             <p><strong>ESC</strong> - Pausar / Salir</p>
         </div>
@@ -116,7 +116,6 @@
 
         socket.on('connect', () => { myId = socket.id; });
 
-        // 1. Creador de Texto (Sprites)
         function crearTextoSala(mensaje) {
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
@@ -125,25 +124,20 @@
 
             context.font = "Bold 32px Arial";
             context.textAlign = "center";
-            
-            // Borde oscuro para que se lea en el cielo brillante
             context.fillStyle = "rgba(0,0,0,0.8)";
             context.fillText(mensaje, 130, 66);
-            
-            // Texto blanco
             context.fillStyle = "white";
             context.fillText(mensaje, 128, 64);
 
             const texture = new THREE.CanvasTexture(canvas);
-            const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false }); // depthTest false hace que no atraviese objetos extrañamente
+            const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false }); 
             const sprite = new THREE.Sprite(spriteMaterial);
             
             sprite.scale.set(3, 1.5, 1);
-            sprite.position.y = 2.4; // Altura: justo por encima del jugador
+            sprite.position.y = 2.4; 
             return sprite;
         }
 
-        // 2. Modificamos crearPersonaje para aceptar y mostrar el nickname
         function crearPersonaje(id, nickname) {
             const character = new THREE.Group();
             
@@ -165,10 +159,26 @@
             pack.position.set(0, 0.1, 0.4);
             characterBody.add(pack);
 
-            // Agregar Nombre arriba (Sprite)
             const nombreMostrar = nickname || "Anónimo";
             const cartelNombre = crearTextoSala(nombreMostrar);
-            character.add(cartelNombre); // Los sprites en ThreeJS siempre miran solos a la cámara!
+            character.add(cartelNombre); 
+
+            // --- NUEVO: HITBOX VISUAL (80% OPACIDAD) ---
+            // Creamos un cubo transparente al frente del jugador
+            const hitboxGeo = new THREE.BoxGeometry(3, 3, 3);
+            const hitboxMat = new THREE.MeshBasicMaterial({ 
+                color: 0xff4444, 
+                transparent: true, 
+                opacity: 0.8, // ¡Lo que pediste!
+                depthWrite: false,
+                wireframe: true // Usamos wireframe para que no tape completamente la visión pero sí marque el área
+            });
+            const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
+            hitbox.position.set(0, 1, -2.5); // Posicionada al frente
+            character.add(hitbox);
+            
+            // Guardamos la referencia para hacerla brillar luego
+            character.userData.hitboxMat = hitboxMat;
 
             if (isMe) {
                 const cameraPivot = new THREE.Object3D();
@@ -191,7 +201,6 @@
             targetStates.objects = state.objects;
 
             for (let id in state.players) {
-                // Pasamos el nickname extraido del estado del servidor
                 if (!players[id]) players[id] = crearPersonaje(id, state.players[id].nickname);
             }
 
@@ -216,7 +225,6 @@
                     const roomCode = document.getElementById('roomCode').value;
                     const nickname = document.getElementById('nicknameInput').value || "Invitado";
                     
-                    // Novedad: Enviamos un Objeto con la sala y el nombre
                     socket.emit('joinRoom', { roomId: roomCode, nickname: nickname });
                     isJoined = true;
                 }
@@ -243,6 +251,21 @@
                     if (players[myId]) {
                         players[myId].rotation.y = yaw; 
                         players[myId].userData.cameraPivot.rotation.x = pitch;
+                    }
+                }
+            });
+
+            // --- EVENTO DE ATAQUE (Click Izquierdo) ---
+            document.addEventListener('mousedown', (event) => {
+                // Solo si el juego está activo y hacemos click izquierdo (button === 0)
+                if (document.pointerLockElement === document.body && event.button === 0) {
+                    socket.emit('attack'); // Enviamos orden al servidor
+
+                    // Feedback visual en el cliente local (Destello de la hitbox)
+                    if (players[myId]) {
+                        const mat = players[myId].userData.hitboxMat;
+                        mat.color.setHex(0xffffff); // Cambia a blanco
+                        setTimeout(() => { mat.color.setHex(0xff4444); }, 100); // Vuelve a rojo casi instantáneo
                     }
                 }
             });

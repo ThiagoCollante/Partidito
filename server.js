@@ -27,15 +27,16 @@ function createRoom(roomId) {
 
     const objects = {};
 
+    // AHORA SON PELOTAS (Esferas)
     for (let i = 0; i < 15; i++) {
         const x = (Math.random() - 0.5) * 40;
         const z = (Math.random() - 0.5) * 40;
         if (Math.abs(x) < 5 && Math.abs(z) < 5) continue; 
 
-        // Las cajas pesan "2". Con la fuerza que aplicaremos, saldrán volando.
-        const box = new CANNON.Body({ mass: 2, shape: new CANNON.Box(new CANNON.Vec3(1, 1, 1)), position: new CANNON.Vec3(x, 2, z) });
-        world.addBody(box); 
-        objects[`box_${i}`] = { body: box, shape: 'box' };
+        // Radio 1, masa 2
+        const sphere = new CANNON.Body({ mass: 2, shape: new CANNON.Sphere(1), position: new CANNON.Vec3(x, 2, z) });
+        world.addBody(sphere); 
+        objects[`ball_${i}`] = { body: sphere, shape: 'sphere' };
     }
 
     rooms[roomId] = { world, players: {}, objects, slipperyMaterial };
@@ -74,49 +75,45 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- NUEVO: SISTEMA DE ATAQUE / FLING ---
+    // --- SISTEMA DE FLING RADIAL CENTRADO EN EL JUGADOR ---
     socket.on('attack', () => {
         const room = rooms[socket.roomId];
         if (!room || !room.players[socket.id]) return;
 
         const playerBody = room.players[socket.id];
-        const yaw = playerBody.input.yaw;
+        
+        // Radio de detección (tu hitbox + margen para atrapar la pelota)
+        const hitboxRadius = 2.5; 
 
-        // 1. Calcular el centro de la hitbox en el mundo (2.5 unidades al frente del jugador)
-        const offset = 2.5; 
-        const hitboxX = playerBody.position.x - Math.sin(yaw) * offset;
-        const hitboxZ = playerBody.position.z - Math.cos(yaw) * offset;
-        const hitboxRadius = 2.5; // Tamaño del área de efecto para agarrar las cajas
-
-        // 2. Revisar qué objetos están dentro del área
         for (const objId in room.objects) {
             const objBody = room.objects[objId].body;
             
-            const dx = objBody.position.x - hitboxX;
+            // Vector desde el jugador hacia el objeto
+            const dx = objBody.position.x - playerBody.position.x;
             const dy = objBody.position.y - playerBody.position.y;
-            const dz = objBody.position.z - hitboxZ;
+            const dz = objBody.position.z - playerBody.position.z;
             
-            // Distancia del objeto al centro de la hitbox
+            // Distancia absoluta
             const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
+            // Si está dentro de la burbuja del jugador
             if (dist <= hitboxRadius) {
-                // Despertar el objeto físico por si el motor lo puso a "dormir" por inactividad
                 objBody.wakeUp();
 
-                // Calcular dirección del impulso (desde el jugador hacia el objeto para que salgan hacia afuera)
-                const pushX = objBody.position.x - playerBody.position.x;
-                const pushZ = objBody.position.z - playerBody.position.z;
-                const pushDist = Math.sqrt(pushX*pushX + pushZ*pushZ);
+                // Calcular vector horizontal y normalizarlo (para que salga hacia AFUERA desde el jugador)
+                const horizontalDist = Math.sqrt(dx*dx + dz*dz);
+                let normX = 0; let normZ = 0;
                 
-                const normX = pushDist > 0 ? pushX / pushDist : 0;
-                const normZ = pushDist > 0 ? pushZ / pushDist : 0;
+                if (horizontalDist > 0) {
+                    normX = dx / horizontalDist;
+                    normZ = dz / horizontalDist;
+                }
 
-                // APLICAR FUERZA BRUTAL (Fling)
-                objBody.velocity.x = normX * 30; // Empuje horizontal X
-                objBody.velocity.y = 15;         // Empuje vertical (hacia arriba)
-                objBody.velocity.z = normZ * 30; // Empuje horizontal Z
+                // APLICAR FUERZA HACIA AFUERA
+                objBody.velocity.x = normX * 35; // Fling horizontal en el ángulo correcto
+                objBody.velocity.y = 12;         // Salto hacia arriba
+                objBody.velocity.z = normZ * 35; // Fling horizontal en el ángulo correcto
                 
-                // Darles rotación aleatoria para que se vea más caótico
                 objBody.angularVelocity.set(
                     (Math.random() - 0.5) * 20,
                     (Math.random() - 0.5) * 20,
@@ -173,7 +170,7 @@ setInterval(() => {
 
         room.world.step(1 / 30);
 
-        const state = { players: {}, objects: {}, attacks: [] };
+        const state = { players: {}, objects: {} };
         
         for (const id in room.players) {
             const body = room.players[id];

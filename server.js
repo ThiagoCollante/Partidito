@@ -10,15 +10,13 @@ const rooms = {};
 function createRoom(roomId) {
     const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -15, 0) });
     
-    // 1. CREAR MATERIAL SIN FRICCIÓN PARA EL MUNDO
     const slipperyMaterial = new CANNON.Material('slippery');
     const slipperyContact = new CANNON.ContactMaterial(slipperyMaterial, slipperyMaterial, {
-        friction: 0.0,  // Cero fricción física, nosotros la controlamos en el código
-        restitution: 0.0 // Cero rebote
+        friction: 0.0,  
+        restitution: 0.0 
     });
     world.addContactMaterial(slipperyContact);
 
-    // Aplicar el material resbaladizo al suelo
     const groundBody = new CANNON.Body({ 
         type: CANNON.Body.STATIC, 
         shape: new CANNON.Plane(),
@@ -34,7 +32,7 @@ function createRoom(roomId) {
         const z = (Math.random() - 0.5) * 40;
         if (Math.abs(x) < 5 && Math.abs(z) < 5) continue; 
 
-        // A las cajas no les ponemos el slipperyMaterial para que se puedan empujar de forma realista
+        // Las cajas pesan "2". Con la fuerza que aplicaremos, saldrán volando.
         const box = new CANNON.Body({ mass: 2, shape: new CANNON.Box(new CANNON.Vec3(1, 1, 1)), position: new CANNON.Vec3(x, 2, z) });
         world.addBody(box); 
         objects[`box_${i}`] = { body: box, shape: 'box' };
@@ -44,7 +42,6 @@ function createRoom(roomId) {
 }
 
 io.on('connection', (socket) => {
-    // 2. RECIBIR EL NICKNAME DESDE EL CLIENTE
     socket.on('joinRoom', (data) => {
         const roomId = data.roomId;
         if (!rooms[roomId]) createRoom(roomId);
@@ -59,11 +56,11 @@ io.on('connection', (socket) => {
             position: new CANNON.Vec3((Math.random() - 0.5) * 4, 2, (Math.random() - 0.5) * 4),
             fixedRotation: true,
             linearDamping: 0.0,
-            material: room.slipperyMaterial // Aplicar el material al jugador
+            material: room.slipperyMaterial 
         });
         
         playerBody.input = { keys: {}, yaw: 0 };
-        playerBody.nickname = data.nickname; // Guardar el nombre en el cuerpo del jugador
+        playerBody.nickname = data.nickname; 
         
         room.world.addBody(playerBody);
         room.players[socket.id] = playerBody;
@@ -74,6 +71,58 @@ io.on('connection', (socket) => {
         const room = rooms[socket.roomId];
         if (room && room.players[socket.id]) {
             room.players[socket.id].input = data;
+        }
+    });
+
+    // --- NUEVO: SISTEMA DE ATAQUE / FLING ---
+    socket.on('attack', () => {
+        const room = rooms[socket.roomId];
+        if (!room || !room.players[socket.id]) return;
+
+        const playerBody = room.players[socket.id];
+        const yaw = playerBody.input.yaw;
+
+        // 1. Calcular el centro de la hitbox en el mundo (2.5 unidades al frente del jugador)
+        const offset = 2.5; 
+        const hitboxX = playerBody.position.x - Math.sin(yaw) * offset;
+        const hitboxZ = playerBody.position.z - Math.cos(yaw) * offset;
+        const hitboxRadius = 2.5; // Tamaño del área de efecto para agarrar las cajas
+
+        // 2. Revisar qué objetos están dentro del área
+        for (const objId in room.objects) {
+            const objBody = room.objects[objId].body;
+            
+            const dx = objBody.position.x - hitboxX;
+            const dy = objBody.position.y - playerBody.position.y;
+            const dz = objBody.position.z - hitboxZ;
+            
+            // Distancia del objeto al centro de la hitbox
+            const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+            if (dist <= hitboxRadius) {
+                // Despertar el objeto físico por si el motor lo puso a "dormir" por inactividad
+                objBody.wakeUp();
+
+                // Calcular dirección del impulso (desde el jugador hacia el objeto para que salgan hacia afuera)
+                const pushX = objBody.position.x - playerBody.position.x;
+                const pushZ = objBody.position.z - playerBody.position.z;
+                const pushDist = Math.sqrt(pushX*pushX + pushZ*pushZ);
+                
+                const normX = pushDist > 0 ? pushX / pushDist : 0;
+                const normZ = pushDist > 0 ? pushZ / pushDist : 0;
+
+                // APLICAR FUERZA BRUTAL (Fling)
+                objBody.velocity.x = normX * 30; // Empuje horizontal X
+                objBody.velocity.y = 15;         // Empuje vertical (hacia arriba)
+                objBody.velocity.z = normZ * 30; // Empuje horizontal Z
+                
+                // Darles rotación aleatoria para que se vea más caótico
+                objBody.angularVelocity.set(
+                    (Math.random() - 0.5) * 20,
+                    (Math.random() - 0.5) * 20,
+                    (Math.random() - 0.5) * 20
+                );
+            }
         }
     });
 
@@ -124,7 +173,7 @@ setInterval(() => {
 
         room.world.step(1 / 30);
 
-        const state = { players: {}, objects: {} };
+        const state = { players: {}, objects: {}, attacks: [] };
         
         for (const id in room.players) {
             const body = room.players[id];
@@ -133,7 +182,7 @@ setInterval(() => {
                 y: body.position.y - 0.5, 
                 z: body.position.z,
                 yaw: body.input.yaw,
-                nickname: body.nickname // Mandar el nickname a todos
+                nickname: body.nickname 
             };
         }
         

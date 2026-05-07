@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Juego Multiplayer - Hitbox</title>
+    <title>Juego Multiplayer - Area Radial</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; display: block; }
@@ -47,7 +47,7 @@
         <div class="instructions">
             <p><strong>W, A, S, D</strong> - Moverse</p>
             <p><strong>ESPACIO</strong> - Saltar</p>
-            <p><strong>CLICK IZQUIERDO</strong> - Fling! (Lanzar objetos)</p>
+            <p><strong>CLICK IZQ</strong> - Expulsión Radial</p>
             <p><strong>Ratón</strong> - Mirar</p>
             <p><strong>ESC</strong> - Pausar / Salir</p>
         </div>
@@ -144,6 +144,7 @@
             const isMe = (id === myId);
             const colorBody = isMe ? 0x0078d7 : 0xff3333; 
 
+            // Cuerpo del jugador
             const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 2, 16); 
             const bodyMat = new THREE.MeshStandardMaterial({ color: colorBody, roughness: 0.4 });
             const characterBody = new THREE.Mesh(bodyGeo, bodyMat);
@@ -163,21 +164,20 @@
             const cartelNombre = crearTextoSala(nombreMostrar);
             character.add(cartelNombre); 
 
-            // --- NUEVO: HITBOX VISUAL (80% OPACIDAD) ---
-            // Creamos un cubo transparente al frente del jugador
-            const hitboxGeo = new THREE.BoxGeometry(3, 3, 3);
+            // --- NUEVA HITBOX CILÍNDRICA (Envuelve al jugador) ---
+            // Radio 0.8 (más ancho), Altura 2.4 (más alto)
+            const hitboxGeo = new THREE.CylinderGeometry(0.8, 0.8, 2.4, 16);
             const hitboxMat = new THREE.MeshBasicMaterial({ 
                 color: 0xff4444, 
                 transparent: true, 
-                opacity: 0.8, // ¡Lo que pediste!
+                opacity: 0.8, 
                 depthWrite: false,
-                wireframe: true // Usamos wireframe para que no tape completamente la visión pero sí marque el área
+                wireframe: true 
             });
             const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
-            hitbox.position.set(0, 1, -2.5); // Posicionada al frente
+            hitbox.position.set(0, 1, 0); // Está en la posición 0 respecto al personaje (lo envuelve)
             character.add(hitbox);
             
-            // Guardamos la referencia para hacerla brillar luego
             character.userData.hitboxMat = hitboxMat;
 
             if (isMe) {
@@ -206,8 +206,10 @@
 
             for (let id in state.objects) {
                 if (!meshes[id]) {
-                    const objMat = new THREE.MeshStandardMaterial({ color: 0xffa500 });
-                    const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), objMat);
+                    // AHORA RENDERIZA ESFERAS (Pelotas)
+                    const objMat = new THREE.MeshStandardMaterial({ color: 0xffa500, roughness: 0.3 });
+                    // SphereGeometry(radio, segmentosX, segmentosY)
+                    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), objMat);
                     mesh.castShadow = true; mesh.receiveShadow = true;
                     scene.add(mesh);
                     meshes[id] = mesh;
@@ -255,17 +257,14 @@
                 }
             });
 
-            // --- EVENTO DE ATAQUE (Click Izquierdo) ---
             document.addEventListener('mousedown', (event) => {
-                // Solo si el juego está activo y hacemos click izquierdo (button === 0)
                 if (document.pointerLockElement === document.body && event.button === 0) {
-                    socket.emit('attack'); // Enviamos orden al servidor
+                    socket.emit('attack'); 
 
-                    // Feedback visual en el cliente local (Destello de la hitbox)
                     if (players[myId]) {
                         const mat = players[myId].userData.hitboxMat;
-                        mat.color.setHex(0xffffff); // Cambia a blanco
-                        setTimeout(() => { mat.color.setHex(0xff4444); }, 100); // Vuelve a rojo casi instantáneo
+                        mat.color.setHex(0xffffff); 
+                        setTimeout(() => { mat.color.setHex(0xff4444); }, 100); 
                     }
                 }
             });

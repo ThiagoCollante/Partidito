@@ -56,7 +56,6 @@ function createRoom(roomId) {
     });
     world.addBody(smallBall); 
     
-    // curveMaxTime define la duración del efecto de la pelota en ticks (45 ticks = 1.5 segundos)
     objects[`main_ball`] = { body: smallBall, shape: 'soccer_ball', possessor: null, cooldown: 0, curveTimer: 0, curveMaxTime: 45 };
 
     rooms[roomId] = { world, players: {}, objects, slipperyMaterial };
@@ -105,8 +104,6 @@ io.on('connection', (socket) => {
         if (ballData.possessor === socket.id) {
             ballData.possessor = null;
             ballData.cooldown = 15; 
-            
-            // Inicia el temporizador de la curva
             ballData.curveTimer = ballData.curveMaxTime; 
 
             const ballBody = ballData.body;
@@ -119,43 +116,47 @@ io.on('connection', (socket) => {
             const spinX = attackData.spinX || 0;    
             const spinY = attackData.spinY || 0;    
 
-            // 1. Calcular el Vector Frontal de la Patada (Hacia donde miras)
+            // --- 1. Calcular VECTORES LOCALES basados en tu cámara ---
+            // Vector Frontal
             const dirX = -Math.sin(yaw) * Math.cos(pitch);
             const dirY = Math.sin(pitch);
             const dirZ = -Math.cos(yaw) * Math.cos(pitch);
+            const forwardVector = new CANNON.Vec3(dirX, dirY, dirZ);
 
+            // Vector Derecho (Fijo en el horizonte relativo a ti)
+            const rightX = Math.cos(yaw);
+            const rightY = 0;
+            const rightZ = -Math.sin(yaw);
+            const rightVector = new CANNON.Vec3(rightX, rightY, rightZ);
+
+            // Vector Arriba (Calculado dinámicamente haciendo Right x Forward)
+            const upVector = new CANNON.Vec3();
+            rightVector.cross(forwardVector, upVector);
+
+            // --- 2. Aplicar la Fuerza de Tiro ---
             const baseKickForce = 26; 
             const totalForce = baseKickForce * power;
-            // Un pequeño levantamiento extra (+3) para que no raspe el suelo si miras totalmente horizontal
             const lift = (dirY * totalForce * 0.9) + (3 * power);
             
             ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
             
-            // --- ¡NUEVO SISTEMA OMNIDIRECCIONAL (EJES LOCALES)! ---
-            // 2. Calcular Vector Derecho de tu cámara
-            const rightX = Math.cos(yaw);
-            const rightY = 0;
-            const rightZ = -Math.sin(yaw);
+            // --- 3. MATEMÁTICA PURA OMNIDIRECCIONAL ---
+            // Definimos hacia dónde quieres que curve la pelota basándonos en tu puntero:
+            // spinX > 0 (derecha) -> curva a la derecha (+rightVector)
+            // spinY < 0 (arriba) -> curva hacia arriba (+upVector)
+            const curveDir = new CANNON.Vec3(
+                rightVector.x * spinX + upVector.x * (-spinY),
+                rightVector.y * spinX + upVector.y * (-spinY),
+                rightVector.z * spinX + upVector.z * (-spinY)
+            );
 
-            // 3. Calcular Vector Arriba de tu cámara (Trigonometría Esférica pura)
-            const upX = Math.sin(yaw) * Math.sin(pitch);
-            const upY = Math.cos(pitch);
-            const upZ = Math.cos(yaw) * Math.sin(pitch);
+            // Calculamos el Eje de Rotación exacto que generará esa curva con Producto Cruz
+            const omegaDir = new CANNON.Vec3();
+            forwardVector.cross(curveDir, omegaDir);
 
-            // La fuerza de rotación general
-            const spinFactor = 16 * power; 
-            
-            // La rotación Left/Right se aplica sobre TU eje Arriba
-            const sX = -spinX * spinFactor; 
-            // La rotación Top/Backspin se aplica sobre TU eje Derecho
-            const sY = spinY * spinFactor;
-
-            // Combinar los vectores de rotación locales en un vector global para el motor
-            const angVelX = (sY * rightX) + (sX * upX);
-            const angVelY = (sY * rightY) + (sX * upY);
-            const angVelZ = (sY * rightZ) + (sX * upZ);
-
-            ballBody.angularVelocity.set(angVelX, angVelY, angVelZ);
+            // Aplicamos la rotación
+            const spinFactor = 25 * power; 
+            ballBody.angularVelocity.set(omegaDir.x * spinFactor, omegaDir.y * spinFactor, omegaDir.z * spinFactor);
         }
     });
 
@@ -183,9 +184,10 @@ setInterval(() => {
         const ballData = room.objects['main_ball'];
         const ballBody = ballData.body;
 
+        // Limitar excesos de física para evitar desincronizaciones de red
         const v = ballBody.velocity;
         const currentSpeed = Math.sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
-        const MAX_SPEED = 85; // Aumentado para tiros súper cargados
+        const MAX_SPEED = 85; 
         
         if (currentSpeed > MAX_SPEED) {
             v.x = (v.x / currentSpeed) * MAX_SPEED;
@@ -195,7 +197,7 @@ setInterval(() => {
 
         const w = ballBody.angularVelocity;
         const currentSpin = Math.sqrt(w.x*w.x + w.y*w.y + w.z*w.z);
-        const MAX_SPIN = 35; // Aumentado para tolerar efectos más extremos
+        const MAX_SPIN = 50; // Tolerancia alta para permitir giros espectaculares
         
         if (currentSpin > MAX_SPIN) {
             w.x = (w.x / currentSpin) * MAX_SPIN;
@@ -211,15 +213,12 @@ setInterval(() => {
             ballData.possessor = null;
         }
 
-        // --- EFECTO MAGNUS CON FADE-OUT FLUIDO ---
+        // --- EFECTO MAGNUS AERODINÁMICO ---
         if (ballData.curveTimer > 0) {
             ballData.curveTimer--; 
             
-            // El Ratio va de 1.0 a 0.0 a medida que pasa el tiempo
             const powerRatio = ballData.curveTimer / ballData.curveMaxTime;
-            
-            // Constante súper fuerte al inicio que se reduce progresivamente
-            const magnusConstant = 0.016 * powerRatio; 
+            const magnusConstant = 0.008 * powerRatio; 
             
             const magnusForce = new CANNON.Vec3(
                 (w.y * v.z - w.z * v.y) * magnusConstant,

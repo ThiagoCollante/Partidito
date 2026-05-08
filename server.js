@@ -20,7 +20,6 @@ function createRoom(roomId) {
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(groundBody);
 
-    // --- NUEVAS DIMENSIONES: CANCHA DE 70 x 105 ---
     const fieldWidth = 70;
     const fieldLength = 105;
     const wallThickness = 4; 
@@ -38,8 +37,7 @@ function createRoom(roomId) {
 
     world.addBody(wallN); world.addBody(wallS); world.addBody(wallE); world.addBody(wallW); world.addBody(roof);
 
-    // Físicas de los Arcos adaptadas a la nueva distancia
-    const goalZ = 51; // Acomodado al borde de la cancha (-52.5)
+    const goalZ = 51; 
     const goalSideShape = new CANNON.Box(new CANNON.Vec3(0.2, 1.5, 1.5));
     world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(-5.2, 1.5, -goalZ), material: bouncyMaterial }));
     world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(5.2, 1.5, -goalZ), material: bouncyMaterial }));
@@ -95,7 +93,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- NUEVO SISTEMA DE TIRO CON CARGA Y EFECTO (SPIN) ---
     socket.on('attack', (attackData) => {
         const room = rooms[socket.roomId];
         if (!room || !room.players[socket.id]) return;
@@ -107,30 +104,30 @@ io.on('connection', (socket) => {
             ballData.possessor = null;
             ballData.cooldown = 15; 
 
-            // Datos que envía el cliente
             const yaw = attackData.yaw;
             const pitch = attackData.pitch;
-            const power = attackData.power || 1;    // De 0.5 (tiro rápido) a 2.0 (cargado al máximo)
-            const spinX = attackData.spinX || 0;    // De -1 a 1 (Efecto izquierda/derecha)
-            const spinY = attackData.spinY || 0;    // De -1 a 1 (Topspin/Backspin)
+            const power = attackData.power || 1;    
+            const spinX = attackData.spinX || 0;    
+            const spinY = attackData.spinY || 0;    
 
             const dirX = -Math.sin(yaw) * Math.cos(pitch);
             const dirY = Math.sin(pitch);
             const dirZ = -Math.cos(yaw) * Math.cos(pitch);
 
-            const baseKickForce = 50; 
+            // CORRECCIÓN 1: Reducir la fuerza bruta
+            const baseKickForce = 22; 
             const totalForce = baseKickForce * power;
             
-            const lift = (dirY * totalForce) + (5 * power);
+            // CORRECCIÓN 2: Reducir un poco el componente vertical exagerado
+            const lift = (dirY * totalForce * 0.8) + (3 * power);
 
             const ballBody = ballData.body;
             ballBody.wakeUp(); 
             
             ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
             
-            // Aplicar la rotación para el Efecto Magnus en el aire
-            // El spinX negativo (punto a la izq) aplica rotación en Y para curvar a la izquierda.
-            const spinFactor = 35 * power;
+            // CORRECCIÓN 3: Reducir las RPM de la pelota para que la curva sea manejable
+            const spinFactor = 12 * power; 
             ballBody.angularVelocity.set(spinY * spinFactor, -spinX * spinFactor, 0);
         }
     });
@@ -156,11 +153,19 @@ setInterval(() => {
         const ballData = room.objects['main_ball'];
         const ballBody = ballData.body;
 
-        // --- EFECTO MAGNUS (CURVA EN EL AIRE) ---
-        // Calcula la fuerza perpendicular a la velocidad y la rotación para curvar la bola.
+        // --- SISTEMA ANTI-SALIDAS ---
+        // Si la pelota atraviesa una pared o el techo (por bugs), reiniciarla al centro
+        if (Math.abs(ballBody.position.x) > 38 || Math.abs(ballBody.position.z) > 58 || ballBody.position.y > 25 || ballBody.position.y < -2) {
+            ballBody.position.set(0, 5, 0);
+            ballBody.velocity.set(0, 0, 0);
+            ballBody.angularVelocity.set(0, 0, 0);
+            ballData.possessor = null;
+        }
+
+        // --- EFECTO MAGNUS REFINADO ---
         const v = ballBody.velocity;
         const w = ballBody.angularVelocity;
-        const magnusConstant = 0.025; // Intensidad del efecto en el aire
+        const magnusConstant = 0.006; // CORRECCIÓN 4: Curva mucho más suave y realista
         const magnusForce = new CANNON.Vec3(
             (w.y * v.z - w.z * v.y) * magnusConstant,
             (w.z * v.x - w.x * v.z) * magnusConstant,
@@ -168,18 +173,19 @@ setInterval(() => {
         );
         ballBody.applyForce(magnusForce, ballBody.position);
 
-
         if (ballData.cooldown > 0) ballData.cooldown--;
 
+        // CORRECCIÓN 5: POSESIÓN CON DISTANCIA 2D
         if (!ballData.possessor && ballData.cooldown <= 0) {
-            const grabRadius = 2.0; 
+            const grabRadius = 3.0; // Hitbox generosa
             for (const id in room.players) {
                 const playerBody = room.players[id];
+                
+                // Calculamos solo X y Z ignorando si la pelota está en el suelo y tú más alto
                 const dx = ballBody.position.x - playerBody.position.x;
-                const dy = ballBody.position.y - playerBody.position.y;
                 const dz = ballBody.position.z - playerBody.position.z;
                 
-                if (Math.sqrt(dx*dx + dy*dy + dz*dz) <= grabRadius) {
+                if (Math.sqrt(dx*dx + dz*dz) <= grabRadius) {
                     ballData.possessor = id;
                     break; 
                 }
@@ -250,7 +256,7 @@ setInterval(() => {
                 shape: objData.shape,
                 x: objBody.position.x, y: objBody.position.y, z: objBody.position.z,
                 qx: objBody.quaternion.x, qy: objBody.quaternion.y, qz: objBody.quaternion.z, qw: objBody.quaternion.w,
-                possessor: objData.possessor // IMPORTANTÍSIMO: Avisarle a los clientes quién tiene el balón
+                possessor: objData.possessor
             };
         }
 

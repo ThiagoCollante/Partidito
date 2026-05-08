@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Juego Multiplayer - Pro Arena 70x105</title>
+    <title>Juego Multiplayer - Pro Arena</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; display: block; }
@@ -28,7 +28,6 @@
         .instructions { margin-top: 20px; text-align: center; color: #ccc; line-height: 1.6; }
         .hotkey { background: #333; padding: 2px 6px; border-radius: 4px; border-bottom: 2px solid #111; font-family: monospace; font-weight: bold; color: #00ffaa; }
 
-        /* NUEVA MIRA DINÁMICA (Círculo con punto libre) */
         #crosshair-container {
             position: absolute; top: 50%; left: 50%; width: 50px; height: 50px;
             border: 2px solid rgba(255, 255, 255, 0.5); border-radius: 50%;
@@ -38,6 +37,13 @@
             position: absolute; top: 50%; left: 50%; width: 8px; height: 8px;
             background-color: white; border-radius: 50%;
             transform: translate(-50%, -50%); transition: background-color 0.2s;
+        }
+
+        /* NUEVO: Número de Versión */
+        #version-number {
+            position: absolute; bottom: 10px; right: 15px;
+            color: rgba(255, 255, 255, 0.4); font-family: monospace; font-size: 14px;
+            z-index: 20; pointer-events: none; font-weight: bold;
         }
     </style>
     <script src="/socket.io/socket.io.js"></script>
@@ -63,6 +69,8 @@
         <div id="crosshair-dot"></div>
     </div>
 
+    <div id="version-number">v1.5.0 - Pro Arena</div>
+
     <div id="canvas-container"></div>
 
     <script>
@@ -82,12 +90,11 @@
 
         let lastSendTime = 0;
 
-        // --- VARIABLES DE CARGA Y EFECTO (SPIN) ---
         let isCharging = false;
         let chargeStart = 0;
         let dotOffsetX = 0;
         let dotOffsetY = 0;
-        const circleRadius = 25; // Radio en píxeles del anillo blanco
+        const circleRadius = 25; 
 
         const uiLayer = document.getElementById('ui-layer');
         const btnStart = document.getElementById('btn-start');
@@ -126,7 +133,6 @@
             dirLight.shadow.camera.bottom = -60;
             scene.add(dirLight);
 
-            // --- CANCHA PROFESIONAL 70 x 105 ---
             const fieldWidth = 70;
             const fieldLength = 105;
 
@@ -144,14 +150,13 @@
                 scene.add(line);
             }
             
-            crearLinea(fieldWidth, 0.3, 0, 0); // Centro
-            const ringGeo = new THREE.RingGeometry(8, 8.3, 32); // Círculo central más grande
+            crearLinea(fieldWidth, 0.3, 0, 0); 
+            const ringGeo = new THREE.RingGeometry(8, 8.3, 32); 
             const ring = new THREE.Mesh(ringGeo, lineMat);
             ring.rotation.x = -Math.PI / 2;
             ring.position.y = 0.02;
             scene.add(ring);
             
-            // Áreas adaptadas (16 metros aprox)
             crearLinea(30, 0.3, 0, -36); 
             crearLinea(0.3, 16.5, -15, -44.25); 
             crearLinea(0.3, 16.5, 15, -44.25); 
@@ -185,7 +190,6 @@
                 scene.add(goalGroup);
             }
 
-            // Los arcos ahora están a 52.5 del centro
             crearArco(-52.5, 0); 
             crearArco(52.5, Math.PI); 
 
@@ -252,8 +256,11 @@
                 cameraPivot.position.y = 1.5; 
                 character.add(cameraPivot);
 
-                camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 500);
-                camera.position.set(0.8, 0.5, 3.0); 
+                // --- NUEVO FOV (AUMENTADO A 110 PARA VISTA QUAKE PRO) ---
+                camera = new THREE.PerspectiveCamera(110, window.innerWidth / window.innerHeight, 0.1, 500);
+                
+                // Mantenemos la cámara un poco atrás y arriba para ver mejor el cuerpo
+                camera.position.set(0.8, 0.5, 3.5); 
                 cameraPivot.add(camera);
 
                 character.userData.cameraPivot = cameraPivot; 
@@ -307,25 +314,22 @@
                     uiLayer.classList.remove('hidden');
                     crosshairContainer.style.display = 'none';
                     keys.w = keys.a = keys.s = keys.d = keys.space = false;
-                    isCharging = false; // Cancela la carga si se abre el menú
+                    isCharging = false; 
                 }
             });
 
             document.addEventListener('mousemove', (event) => {
                 if (document.pointerLockElement === document.body) {
                     if (isCharging) {
-                        // BLOQUEO: Movemos el punto de efecto (Spin) en vez de la cámara
                         dotOffsetX += event.movementX * 0.5;
                         dotOffsetY += event.movementY * 0.5;
                         
-                        // Limitamos el punto dentro del anillo (25px de radio)
                         const dist = Math.sqrt(dotOffsetX*dotOffsetX + dotOffsetY*dotOffsetY);
                         if (dist > circleRadius) {
                             dotOffsetX = (dotOffsetX / dist) * circleRadius;
                             dotOffsetY = (dotOffsetY / dist) * circleRadius;
                         }
                     } else {
-                        // Cámara normal
                         yaw -= event.movementX * mouseSensitivity;
                         pitch -= event.movementY * mouseSensitivity;
                         pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 4, pitch));
@@ -338,11 +342,9 @@
                 }
             });
 
-            // INICIO DE CARGA
             document.addEventListener('mousedown', (event) => {
                 if (document.pointerLockElement === document.body && event.button === 0) {
                     const miPelota = targetStates.objects['main_ball'];
-                    // Solo podemos cargar si tenemos la pelota
                     if (miPelota && miPelota.possessor === myId) {
                         isCharging = true;
                         chargeStart = Date.now();
@@ -353,23 +355,18 @@
                 }
             });
 
-            // FIN DE CARGA Y DISPARO
             document.addEventListener('mouseup', (event) => {
                 if (isCharging && event.button === 0) {
                     isCharging = false;
                     
-                    // Calculamos el tiempo (máximo 1.5 segundos para no esperar eternamente)
                     const chargeTime = Math.min((Date.now() - chargeStart) / 1000, 1.5);
-                    // El poder va de 0.5 (clic rápido) hasta 2.0 (carga máxima)
                     const power = 0.5 + (chargeTime / 1.5) * 1.5; 
                     
-                    // El Spin va de -1 a 1 según la posición del punto dentro del círculo de 25px
                     const spinX = dotOffsetX / circleRadius;
                     const spinY = dotOffsetY / circleRadius;
 
                     socket.emit('attack', { yaw, pitch, power, spinX, spinY });
 
-                    // Reseteamos visualmente la mira
                     crosshairDot.style.backgroundColor = 'white';
                     crosshairDot.style.transform = `translate(-50%, -50%) scale(1)`;
                     dotOffsetX = 0; dotOffsetY = 0;
@@ -407,18 +404,14 @@
             requestAnimationFrame(animate);
 
             if (isJoined) {
-                // --- VISUALIZACIÓN DE LA CARGA DE TIRO ---
                 if (isCharging) {
-                    const chargeProgress = Math.min((Date.now() - chargeStart) / 1000, 1.5) / 1.5; // Va de 0 a 1
-                    
-                    // El punto crece y cambia de color a rojo según la carga
+                    const chargeProgress = Math.min((Date.now() - chargeStart) / 1000, 1.5) / 1.5; 
                     crosshairDot.style.backgroundColor = chargeProgress > 0.8 ? '#ff4444' : (chargeProgress > 0.4 ? '#ffff44' : '#ffffff');
                     crosshairDot.style.transform = `translate(calc(-50% + ${dotOffsetX}px), calc(-50% + ${dotOffsetY}px)) scale(${1 + chargeProgress * 1.5})`;
                 }
 
                 const now = Date.now();
                 if (now - lastSendTime > 1000 / 30) {
-                    // BLOQUEO DE MOVIMIENTO: Si está cargando, el jugador no envía controles W A S D
                     let teclasActuales = { ...keys };
                     if (isCharging) {
                         teclasActuales.w = teclasActuales.a = teclasActuales.s = teclasActuales.d = teclasActuales.space = false;

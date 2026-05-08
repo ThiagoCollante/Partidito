@@ -55,7 +55,9 @@ function createRoom(roomId) {
         angularDamping: 0.4  
     });
     world.addBody(smallBall); 
-    objects[`main_ball`] = { body: smallBall, shape: 'soccer_ball', possessor: null, cooldown: 0 };
+    
+    // NUEVO: curveTimer añadido al objeto de la pelota
+    objects[`main_ball`] = { body: smallBall, shape: 'soccer_ball', possessor: null, cooldown: 0, curveTimer: 0 };
 
     rooms[roomId] = { world, players: {}, objects, slipperyMaterial };
 }
@@ -103,6 +105,9 @@ io.on('connection', (socket) => {
         if (ballData.possessor === socket.id) {
             ballData.possessor = null;
             ballData.cooldown = 15; 
+            
+            // NUEVO: Tiempo activo de la curva (20 ticks = ~0.66 segundos)
+            ballData.curveTimer = 20;
 
             const yaw = attackData.yaw;
             const pitch = attackData.pitch;
@@ -114,11 +119,9 @@ io.on('connection', (socket) => {
             const dirY = Math.sin(pitch);
             const dirZ = -Math.cos(yaw) * Math.cos(pitch);
 
-            // CORRECCIÓN 1: Reducir la fuerza bruta
-            const baseKickForce = 22; 
+            const baseKickForce = 25; 
             const totalForce = baseKickForce * power;
             
-            // CORRECCIÓN 2: Reducir un poco el componente vertical exagerado
             const lift = (dirY * totalForce * 0.8) + (3 * power);
 
             const ballBody = ballData.body;
@@ -126,8 +129,7 @@ io.on('connection', (socket) => {
             
             ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
             
-            // CORRECCIÓN 3: Reducir las RPM de la pelota para que la curva sea manejable
-            const spinFactor = 12 * power; 
+            const spinFactor = 15 * power; 
             ballBody.angularVelocity.set(spinY * spinFactor, -spinX * spinFactor, 0);
         }
     });
@@ -153,35 +155,37 @@ setInterval(() => {
         const ballData = room.objects['main_ball'];
         const ballBody = ballData.body;
 
-        // --- SISTEMA ANTI-SALIDAS ---
-        // Si la pelota atraviesa una pared o el techo (por bugs), reiniciarla al centro
-        if (Math.abs(ballBody.position.x) > 38 || Math.abs(ballBody.position.z) > 58 || ballBody.position.y > 25 || ballBody.position.y < -2) {
+        // --- SISTEMA ANTI-SALIDAS CORREGIDO ---
+        // Límites expandidos a dimensiones masivas para que los tiros altos no se reinicien
+        if (Math.abs(ballBody.position.x) > 100 || Math.abs(ballBody.position.z) > 150 || ballBody.position.y > 100 || ballBody.position.y < -5) {
             ballBody.position.set(0, 5, 0);
             ballBody.velocity.set(0, 0, 0);
             ballBody.angularVelocity.set(0, 0, 0);
             ballData.possessor = null;
         }
 
-        // --- EFECTO MAGNUS REFINADO ---
-        const v = ballBody.velocity;
-        const w = ballBody.angularVelocity;
-        const magnusConstant = 0.006; // CORRECCIÓN 4: Curva mucho más suave y realista
-        const magnusForce = new CANNON.Vec3(
-            (w.y * v.z - w.z * v.y) * magnusConstant,
-            (w.z * v.x - w.x * v.z) * magnusConstant,
-            (w.x * v.y - w.y * v.x) * magnusConstant
-        );
-        ballBody.applyForce(magnusForce, ballBody.position);
+        // --- EFECTO MAGNUS CON TEMPORIZADOR ---
+        if (ballData.curveTimer > 0) {
+            ballData.curveTimer--; // Reduce el tiempo restante
+            
+            const v = ballBody.velocity;
+            const w = ballBody.angularVelocity;
+            const magnusConstant = 0.004; // Curva moderada y realista
+            
+            const magnusForce = new CANNON.Vec3(
+                (w.y * v.z - w.z * v.y) * magnusConstant,
+                (w.z * v.x - w.x * v.z) * magnusConstant,
+                (w.x * v.y - w.y * v.x) * magnusConstant
+            );
+            ballBody.applyForce(magnusForce, ballBody.position);
+        }
 
         if (ballData.cooldown > 0) ballData.cooldown--;
 
-        // CORRECCIÓN 5: POSESIÓN CON DISTANCIA 2D
         if (!ballData.possessor && ballData.cooldown <= 0) {
-            const grabRadius = 3.0; // Hitbox generosa
+            const grabRadius = 3.0; 
             for (const id in room.players) {
                 const playerBody = room.players[id];
-                
-                // Calculamos solo X y Z ignorando si la pelota está en el suelo y tú más alto
                 const dx = ballBody.position.x - playerBody.position.x;
                 const dz = ballBody.position.z - playerBody.position.z;
                 
@@ -196,8 +200,9 @@ setInterval(() => {
             const ownerBody = room.players[ballData.possessor];
             if (ownerBody) {
                 const yaw = ownerBody.input.yaw;
-                const targetX = ownerBody.position.x - Math.sin(yaw) * 1.0;
-                const targetZ = ownerBody.position.z - Math.cos(yaw) * 1.0;
+                // Offset incrementado a 1.5 para evitar auto-colisión al patear en movimiento
+                const targetX = ownerBody.position.x - Math.sin(yaw) * 1.5;
+                const targetZ = ownerBody.position.z - Math.cos(yaw) * 1.5;
                 
                 ballBody.position.set(targetX, 0.3, targetZ);
                 ballBody.velocity.set(0, 0, 0);

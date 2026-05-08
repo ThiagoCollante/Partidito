@@ -51,12 +51,13 @@ function createRoom(roomId) {
         shape: new CANNON.Sphere(0.3), 
         position: new CANNON.Vec3(0, 5, 0), 
         material: bouncyMaterial,
-        linearDamping: 0.3,  // Fricción de aire normal
-        angularDamping: 0.1  // MUCHO MENOR: Permite que el giro (efecto) dure más tiempo vivo
+        linearDamping: 0.3,  
+        angularDamping: 0.1  
     });
     world.addBody(smallBall); 
     
-    objects[`main_ball`] = { body: smallBall, shape: 'soccer_ball', possessor: null, cooldown: 0, curveTimer: 0 };
+    // curveMaxTime define cuánto dura la curva (45 ticks = 1.5 segundos)
+    objects[`main_ball`] = { body: smallBall, shape: 'soccer_ball', possessor: null, cooldown: 0, curveTimer: 0, curveMaxTime: 45 };
 
     rooms[roomId] = { world, players: {}, objects, slipperyMaterial };
 }
@@ -104,7 +105,9 @@ io.on('connection', (socket) => {
         if (ballData.possessor === socket.id) {
             ballData.possessor = null;
             ballData.cooldown = 15; 
-            ballData.curveTimer = 30; // 1 segundo de Efecto Magnus constante
+            
+            // Iniciamos el temporizador de la curva (1.5 segundos)
+            ballData.curveTimer = ballData.curveMaxTime; 
 
             const ballBody = ballData.body;
             ballBody.collisionResponse = true; 
@@ -116,7 +119,6 @@ io.on('connection', (socket) => {
             const spinX = attackData.spinX || 0;    
             const spinY = attackData.spinY || 0;    
 
-            // 1. Vector Frontal (Hacia donde miras)
             const dirX = -Math.sin(yaw) * Math.cos(pitch);
             const dirY = Math.sin(pitch);
             const dirZ = -Math.cos(yaw) * Math.cos(pitch);
@@ -127,21 +129,14 @@ io.on('connection', (socket) => {
             
             ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
             
-            // 2. ¡EL ARREGLO OMNIDIRECCIONAL! 
-            // Calculamos el Eje Derecho (Local X) relativo al jugador para el Topspin/Backspin
             const rightX = Math.cos(yaw);
             const rightZ = -Math.sin(yaw);
 
             const spinFactor = 14 * power; 
-            
-            // spinX (Mover ratón a los lados) -> Gira sobre el eje Y Global (Curva Izquierda/Derecha real)
             const angVelY = -spinX * spinFactor; 
-            
-            // spinY (Mover ratón arriba/abajo) -> Gira sobre el eje Derecho Local (Topspin/Backspin real)
             const angVelX = spinY * rightX * spinFactor;
             const angVelZ = spinY * rightZ * spinFactor;
 
-            // Ahora sí, vectores combinados perfectos sin importar a dónde mires
             ballBody.angularVelocity.set(angVelX, angVelY, angVelZ);
         }
     });
@@ -198,12 +193,15 @@ setInterval(() => {
             ballData.possessor = null;
         }
 
-        // --- EFECTO MAGNUS OMNIDIRECCIONAL ---
+        // --- EFECTO MAGNUS CON DESVANECIMIENTO (FADE-OUT) ---
         if (ballData.curveTimer > 0) {
             ballData.curveTimer--; 
             
-            // Constante ligeramente más alta para asegurar que veas bien la curva
-            const magnusConstant = 0.012; 
+            // El powerRatio va de 1.0 (apenas sale del pie) hasta 0.0 (se acaba la curva)
+            const powerRatio = ballData.curveTimer / ballData.curveMaxTime;
+            
+            // Constante súper fuerte al inicio (0.015) que se reduce progresivamente
+            const magnusConstant = 0.015 * powerRatio; 
             
             const magnusForce = new CANNON.Vec3(
                 (w.y * v.z - w.z * v.y) * magnusConstant,

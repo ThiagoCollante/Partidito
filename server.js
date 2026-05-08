@@ -214,13 +214,10 @@ setInterval(() => {
 
         if (ballData.cooldown > 0) ballData.cooldown--;
 
-        // --- SOLUCIÓN: HITBOX 3D REAL ---
         if (!ballData.possessor && ballData.cooldown <= 0) {
-            const grabRadius = 2.5; // Ajustado para ser preciso
+            const grabRadius = 2.5; 
             for (const id in room.players) {
                 const playerBody = room.players[id];
-                
-                // Calculamos X, Y y Z (Distancia 3D pura)
                 const dx = ballBody.position.x - playerBody.position.x;
                 const dy = ballBody.position.y - playerBody.position.y;
                 const dz = ballBody.position.z - playerBody.position.z;
@@ -276,7 +273,9 @@ setInterval(() => {
             body.velocity.x += rotMoveX * speedMultiplier * delta;
             body.velocity.z += rotMoveZ * speedMultiplier * delta;
 
-            if (input.keys.space && Math.abs(body.velocity.y) < 0.1) {
+            // --- ¡SOLUCIÓN DEL BUG DEL SALTO! ---
+            // Ahora revisa que tu altura sea 0.55 o menor (tocando el piso)
+            if (input.keys.space && body.position.y <= 0.55) {
                 body.velocity.y = 8;
             }
         }

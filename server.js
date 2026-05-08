@@ -14,13 +14,12 @@ function createRoom(roomId) {
     const bouncyMaterial = new CANNON.Material('bouncy');
     
     world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, slipperyMaterial, { friction: 0.0, restitution: 0.0 }));
-    world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, bouncyMaterial, { friction: 0.2, restitution: 0.6 })); // Rebote moderado
+    world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, bouncyMaterial, { friction: 0.2, restitution: 0.6 })); 
 
     const groundBody = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane(), material: slipperyMaterial });
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(groundBody);
 
-    // --- CANCHA 5v5 (Ancho: 40, Largo: 60) ---
     const fieldWidth = 40;
     const fieldLength = 60;
     const wallThickness = 4; 
@@ -38,26 +37,21 @@ function createRoom(roomId) {
 
     world.addBody(wallN); world.addBody(wallS); world.addBody(wallE); world.addBody(wallW); world.addBody(roof);
 
-    // --- FÍSICAS DE LOS ARCOS (Para que la pelota no se escape por los lados del arco) ---
-    // Arco de 10 de ancho, 3 de profundidad
     const goalSideShape = new CANNON.Box(new CANNON.Vec3(0.2, 1.5, 1.5));
-    // Arco Norte
     world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(-5.2, 1.5, -28.5), material: bouncyMaterial }));
     world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(5.2, 1.5, -28.5), material: bouncyMaterial }));
-    // Arco Sur
     world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(-5.2, 1.5, 28.5), material: bouncyMaterial }));
     world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(5.2, 1.5, 28.5), material: bouncyMaterial }));
 
     const objects = {};
 
-    // --- PELOTA CON FRICCIÓN DE AIRE/PASTO ---
     const smallBall = new CANNON.Body({ 
         mass: 0.5,
         shape: new CANNON.Sphere(0.3), 
-        position: new CANNON.Vec3(0, 5, 0), // Empieza en el centro exacto
+        position: new CANNON.Vec3(0, 5, 0), 
         material: bouncyMaterial,
-        linearDamping: 0.5,  // Hace que frene rápidamente por el piso/aire
-        angularDamping: 0.5  // Hace que deje de rodar
+        linearDamping: 0.5,  
+        angularDamping: 0.5  
     });
     world.addBody(smallBall); 
     objects[`main_ball`] = { body: smallBall, shape: 'soccer_ball', possessor: null, cooldown: 0 };
@@ -83,7 +77,7 @@ io.on('connection', (socket) => {
             material: room.slipperyMaterial 
         });
         
-        playerBody.input = { keys: {}, yaw: 0 };
+        playerBody.input = { keys: {}, yaw: 0, pitch: 0 };
         playerBody.nickname = data.nickname; 
         
         room.world.addBody(playerBody);
@@ -98,6 +92,7 @@ io.on('connection', (socket) => {
         }
     });
 
+    // --- NUEVA PATADA CON VECTOR 3D (YAW + PITCH) ---
     socket.on('attack', () => {
         const room = rooms[socket.roomId];
         if (!room || !room.players[socket.id]) return;
@@ -107,20 +102,25 @@ io.on('connection', (socket) => {
 
         if (ballData.possessor === socket.id) {
             ballData.possessor = null;
-            ballData.cooldown = 15; // 0.5 segundos de inmunidad a ser agarrada
+            ballData.cooldown = 15; 
 
             const yaw = playerBody.input.yaw;
-            const normX = -Math.sin(yaw);
-            const normZ = -Math.cos(yaw);
+            const pitch = playerBody.input.pitch || 0; // Ángulo vertical
 
-            // Al tener fricción alta (linearDamping), aumentamos la fuerza base de la patada
+            // Trigonometría esférica
+            const dirX = -Math.sin(yaw) * Math.cos(pitch);
+            const dirY = Math.sin(pitch);
+            const dirZ = -Math.cos(yaw) * Math.cos(pitch);
+
             const kickForce = 65; 
-            const kickLift = 20;  
+            
+            // Calculamos la fuerza hacia arriba. Añadimos un mínimo de "4" para que la pelota no se arrastre por el suelo si miras totalmente recto.
+            const lift = (dirY * kickForce) + 4;
 
             const ballBody = ballData.body;
             ballBody.wakeUp(); 
             
-            ballBody.velocity.set(normX * kickForce, kickLift, normZ * kickForce);
+            ballBody.velocity.set(dirX * kickForce, lift, dirZ * kickForce);
             ballBody.angularVelocity.set((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40);
         }
     });
@@ -143,7 +143,6 @@ setInterval(() => {
         const room = rooms[roomId];
         const delta = 1 / 30; 
 
-        // --- LÓGICA DE POSESIÓN ---
         const ballData = room.objects['main_ball'];
         const ballBody = ballData.body;
 
@@ -168,7 +167,6 @@ setInterval(() => {
             const ownerBody = room.players[ballData.possessor];
             if (ownerBody) {
                 const yaw = ownerBody.input.yaw;
-                // Colocar pelota justo al frente de los pies del jugador
                 const targetX = ownerBody.position.x - Math.sin(yaw) * 1.0;
                 const targetZ = ownerBody.position.z - Math.cos(yaw) * 1.0;
                 
@@ -180,7 +178,6 @@ setInterval(() => {
             }
         }
 
-        // --- MOVIMIENTO ---
         for (const id in room.players) {
             const body = room.players[id];
             const input = body.input;

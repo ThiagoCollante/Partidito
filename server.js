@@ -14,7 +14,7 @@ function createRoom(roomId) {
     const bouncyMaterial = new CANNON.Material('bouncy');
     
     world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, slipperyMaterial, { friction: 0.0, restitution: 0.0 }));
-    world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, bouncyMaterial, { friction: 0.2, restitution: 0.6 })); 
+    world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, bouncyMaterial, { friction: 0.1, restitution: 0.6 })); // Reduje un poco la fricción aquí
 
     const groundBody = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane(), material: slipperyMaterial });
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
@@ -56,7 +56,6 @@ function createRoom(roomId) {
     });
     world.addBody(smallBall); 
     
-    // NUEVO: curveTimer añadido al objeto de la pelota
     objects[`main_ball`] = { body: smallBall, shape: 'soccer_ball', possessor: null, cooldown: 0, curveTimer: 0 };
 
     rooms[roomId] = { world, players: {}, objects, slipperyMaterial };
@@ -105,9 +104,13 @@ io.on('connection', (socket) => {
         if (ballData.possessor === socket.id) {
             ballData.possessor = null;
             ballData.cooldown = 15; 
-            
-            // NUEVO: Tiempo activo de la curva (20 ticks = ~0.66 segundos)
             ballData.curveTimer = 20;
+
+            const ballBody = ballData.body;
+            
+            // ¡SOLUCIÓN! Reactivamos las colisiones justo al patear
+            ballBody.collisionResponse = true; 
+            ballBody.wakeUp(); 
 
             const yaw = attackData.yaw;
             const pitch = attackData.pitch;
@@ -121,15 +124,13 @@ io.on('connection', (socket) => {
 
             const baseKickForce = 25; 
             const totalForce = baseKickForce * power;
-            
             const lift = (dirY * totalForce * 0.8) + (3 * power);
-
-            const ballBody = ballData.body;
-            ballBody.wakeUp(); 
             
+            // Establecemos la velocidad pura
             ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
             
-            const spinFactor = 15 * power; 
+            // Reduje el spinFactor para que no raspe el piso como una sierra eléctrica
+            const spinFactor = 8 * power; 
             ballBody.angularVelocity.set(spinY * spinFactor, -spinX * spinFactor, 0);
         }
     });
@@ -138,7 +139,10 @@ io.on('connection', (socket) => {
         const room = rooms[socket.roomId];
         if (room && room.players[socket.id]) {
             const ballData = room.objects['main_ball'];
-            if (ballData.possessor === socket.id) ballData.possessor = null;
+            if (ballData.possessor === socket.id) {
+                ballData.possessor = null;
+                ballData.body.collisionResponse = true; // Liberamos colisiones si se desconecta
+            }
 
             room.world.removeBody(room.players[socket.id]);
             delete room.players[socket.id];
@@ -155,22 +159,19 @@ setInterval(() => {
         const ballData = room.objects['main_ball'];
         const ballBody = ballData.body;
 
-        // --- SISTEMA ANTI-SALIDAS CORREGIDO ---
-        // Límites expandidos a dimensiones masivas para que los tiros altos no se reinicien
         if (Math.abs(ballBody.position.x) > 100 || Math.abs(ballBody.position.z) > 150 || ballBody.position.y > 100 || ballBody.position.y < -5) {
             ballBody.position.set(0, 5, 0);
             ballBody.velocity.set(0, 0, 0);
             ballBody.angularVelocity.set(0, 0, 0);
+            ballBody.collisionResponse = true;
             ballData.possessor = null;
         }
 
-        // --- EFECTO MAGNUS CON TEMPORIZADOR ---
         if (ballData.curveTimer > 0) {
-            ballData.curveTimer--; // Reduce el tiempo restante
-            
+            ballData.curveTimer--; 
             const v = ballBody.velocity;
             const w = ballBody.angularVelocity;
-            const magnusConstant = 0.004; // Curva moderada y realista
+            const magnusConstant = 0.005; 
             
             const magnusForce = new CANNON.Vec3(
                 (w.y * v.z - w.z * v.y) * magnusConstant,
@@ -191,6 +192,9 @@ setInterval(() => {
                 
                 if (Math.sqrt(dx*dx + dz*dz) <= grabRadius) {
                     ballData.possessor = id;
+                    
+                    // ¡SOLUCIÓN! Desactivamos las colisiones físicas mientras somos dueños de la pelota
+                    ballBody.collisionResponse = false; 
                     break; 
                 }
             }
@@ -200,15 +204,16 @@ setInterval(() => {
             const ownerBody = room.players[ballData.possessor];
             if (ownerBody) {
                 const yaw = ownerBody.input.yaw;
-                // Offset incrementado a 1.5 para evitar auto-colisión al patear en movimiento
                 const targetX = ownerBody.position.x - Math.sin(yaw) * 1.5;
                 const targetZ = ownerBody.position.z - Math.cos(yaw) * 1.5;
                 
-                ballBody.position.set(targetX, 0.3, targetZ);
+                // La subimos ligerísimamente del suelo para que no raspe (0.4 en vez de 0.3)
+                ballBody.position.set(targetX, 0.4, targetZ);
                 ballBody.velocity.set(0, 0, 0);
                 ballBody.angularVelocity.set(0, 0, 0);
             } else {
                 ballData.possessor = null;
+                ballBody.collisionResponse = true;
             }
         }
 

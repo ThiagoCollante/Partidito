@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Juego Multiplayer - Fútbol Arena</title>
+    <title>Juego Multiplayer - Fútbol Arena Sin Lag</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; display: block; }
@@ -47,7 +47,7 @@
         <button id="btn-start" class="btn-start">Entrar a la Cancha</button>
         <div class="instructions">
             <p><strong>Camina sobre la pelota</strong> para tener la posesión.</p>
-            <p><span class="hotkey">CLICK IZQ</span> - Patear Pelota</p>
+            <p><span class="hotkey">CLICK IZQ</span> - Patear Pelota (Donde mires)</p>
             <p><span class="hotkey">W</span> <span class="hotkey">A</span> <span class="hotkey">S</span> <span class="hotkey">D</span> - Moverse | <span class="hotkey">ESPACIO</span> - Saltar</p>
             <p><strong>Ratón</strong> - Mirar y apuntar</p>
         </div>
@@ -71,6 +71,9 @@
         const mouseSensitivity = 0.002;
         const keys = { w: false, a: false, s: false, d: false, space: false };
 
+        // SOLUCIÓN AL LAG: Control de tiempo de envío
+        let lastSendTime = 0;
+
         const uiLayer = document.getElementById('ui-layer');
         const btnStart = document.getElementById('btn-start');
         const crosshair = document.getElementById('crosshair');
@@ -82,7 +85,7 @@
             const container = document.getElementById('canvas-container');
 
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x87ceeb); // Cielo claro
+            scene.background = new THREE.Color(0x87ceeb); 
             scene.fog = new THREE.Fog(0x87ceeb, 30, 150);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -91,7 +94,6 @@
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
             container.appendChild(renderer.domElement);
 
-            // ILUMINACIÓN SOLEADA
             scene.add(new THREE.AmbientLight(0xffffff, 0.6)); 
             const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
             hemiLight.position.set(0, 50, 0);
@@ -108,58 +110,49 @@
             dirLight.shadow.camera.bottom = -40;
             scene.add(dirLight);
 
-            // --- CONSTRUCCIÓN DE LA CANCHA 5v5 (40x60) ---
             const fieldWidth = 40;
             const fieldLength = 60;
 
-            // Pasto Sintético
-            const floorMat = new THREE.MeshStandardMaterial({ color: 0x116e25, roughness: 1.0 }); // Verde oscuro
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x116e25, roughness: 1.0 }); 
             const floor = new THREE.Mesh(new THREE.PlaneGeometry(fieldWidth, fieldLength), floorMat);
             floor.rotation.x = -Math.PI / 2;
             floor.receiveShadow = true;
             scene.add(floor);
 
-            // FUNCIÓN PARA PINTAR LÍNEAS BLANCAS
             const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
             function crearLinea(w, d, x, z) {
                 const line = new THREE.Mesh(new THREE.PlaneGeometry(w, d), lineMat);
                 line.rotation.x = -Math.PI / 2;
-                line.position.set(x, 0.02, z); // Apenas encima del piso
+                line.position.set(x, 0.02, z); 
                 scene.add(line);
             }
             
-            // Línea central
             crearLinea(fieldWidth, 0.3, 0, 0);
-            // Círculo central
             const ringGeo = new THREE.RingGeometry(4.7, 5, 32);
             const ring = new THREE.Mesh(ringGeo, lineMat);
             ring.rotation.x = -Math.PI / 2;
             ring.position.y = 0.02;
             scene.add(ring);
-            // Áreas (Penal)
-            crearLinea(20, 0.3, 0, -22); // Área Norte Frontal
-            crearLinea(0.3, 8, -10, -26); // Área Norte Izq
-            crearLinea(0.3, 8, 10, -26); // Área Norte Der
-            crearLinea(20, 0.3, 0, 22); // Área Sur Frontal
-            crearLinea(0.3, 8, -10, 26); // Área Sur Izq
-            crearLinea(0.3, 8, 10, 26); // Área Sur Der
+            
+            crearLinea(20, 0.3, 0, -22); 
+            crearLinea(0.3, 8, -10, -26); 
+            crearLinea(0.3, 8, 10, -26); 
+            crearLinea(20, 0.3, 0, 22); 
+            crearLinea(0.3, 8, -10, 26); 
+            crearLinea(0.3, 8, 10, 26); 
 
-            // ARCOS (PORTERÍAS) VISUALES
             function crearArco(zPos, rotY) {
                 const goalGroup = new THREE.Group();
                 const postMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.8 });
                 const netMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3, side: THREE.DoubleSide, wireframe: true });
 
-                // Postes
                 const postL = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3, 16), postMat);
                 postL.position.set(-5, 1.5, 0); postL.castShadow = true; goalGroup.add(postL);
                 const postR = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 3, 16), postMat);
                 postR.position.set(5, 1.5, 0); postR.castShadow = true; goalGroup.add(postR);
-                // Travesaño
                 const cross = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 10.3, 16), postMat);
                 cross.rotation.z = Math.PI / 2; cross.position.set(0, 3, 0); cross.castShadow = true; goalGroup.add(cross);
 
-                // Red (Mallas)
                 const netBack = new THREE.Mesh(new THREE.PlaneGeometry(10, 3), netMat);
                 netBack.position.set(0, 1.5, -1.5); goalGroup.add(netBack);
                 const netTop = new THREE.Mesh(new THREE.PlaneGeometry(10, 1.5), netMat);
@@ -174,10 +167,9 @@
                 scene.add(goalGroup);
             }
 
-            crearArco(-28.5, 0); // Arco Norte
-            crearArco(28.5, Math.PI); // Arco Sur
+            crearArco(-28.5, 0); 
+            crearArco(28.5, Math.PI); 
 
-            // Paredes Estilo Estadio Corto
             const wallMat = new THREE.MeshStandardMaterial({ color: 0x334455, roughness: 0.8 });
             const wallGeoX = new THREE.PlaneGeometry(fieldLength, 10);
             const wallGeoZ = new THREE.PlaneGeometry(fieldWidth, 10);
@@ -229,7 +221,6 @@
             const cartelNombre = crearTextoSala(nombreMostrar);
             character.add(cartelNombre); 
 
-            // Hitbox visual (Anillo rojo transparente en los pies indicando el área de agarre)
             const hitboxGeo = new THREE.CylinderGeometry(2.0, 2.0, 0.1, 16);
             const hitboxMat = new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.4, depthWrite: false });
             const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
@@ -305,6 +296,7 @@
                 if (document.pointerLockElement === document.body) {
                     yaw -= event.movementX * mouseSensitivity;
                     pitch -= event.movementY * mouseSensitivity;
+                    // Limitamos la cámara para que no puedas dar la vuelta completa por arriba o por abajo
                     pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 4, pitch));
 
                     if (players[myId]) {
@@ -351,8 +343,15 @@
             requestAnimationFrame(animate);
 
             if (isJoined) {
-                socket.emit('input', { keys, yaw });
-                const lerpFactor = 0.3;
+                const now = Date.now();
+                // SOLUCIÓN AL LAG: Enviamos la información al servidor solo 30 veces por segundo, no a 144hz.
+                if (now - lastSendTime > 1000 / 30) {
+                    // Ahora se incluye el "pitch" en el envío
+                    socket.emit('input', { keys, yaw, pitch });
+                    lastSendTime = now;
+                }
+                
+                const lerpFactor = 0.2; // Interpolación más suave
 
                 for (let id in targetStates.players) {
                     if (players[id]) {

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Juego Multiplayer - Fútbol Arena Sin Lag</title>
+    <title>Juego Multiplayer - Pro Arena 70x105</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; display: block; }
@@ -28,10 +28,16 @@
         .instructions { margin-top: 20px; text-align: center; color: #ccc; line-height: 1.6; }
         .hotkey { background: #333; padding: 2px 6px; border-radius: 4px; border-bottom: 2px solid #111; font-family: monospace; font-weight: bold; color: #00ffaa; }
 
-        .crosshair {
-            position: absolute; top: 50%; left: 50%; width: 6px; height: 6px;
-            background-color: rgba(255, 255, 255, 0.7); border-radius: 50%;
-            transform: translate(-50%, -50%); z-index: 5; pointer-events: none; display: none;
+        /* NUEVA MIRA DINÁMICA (Círculo con punto libre) */
+        #crosshair-container {
+            position: absolute; top: 50%; left: 50%; width: 50px; height: 50px;
+            border: 2px solid rgba(255, 255, 255, 0.5); border-radius: 50%;
+            transform: translate(-50%, -50%); display: none; pointer-events: none; z-index: 5;
+        }
+        #crosshair-dot {
+            position: absolute; top: 50%; left: 50%; width: 8px; height: 8px;
+            background-color: white; border-radius: 50%;
+            transform: translate(-50%, -50%); transition: background-color 0.2s;
         }
     </style>
     <script src="/socket.io/socket.io.js"></script>
@@ -40,20 +46,23 @@
 <body>
 
     <div id="ui-layer">
-        <h1 style="margin-bottom: 10px; color: #44ff44;">Cancha 5v5</h1>
+        <h1 style="margin-bottom: 10px; color: #44ff44;">Cancha 70x105</h1>
         <input type="text" id="nicknameInput" class="room-input" placeholder="Tu Nombre" maxlength="12">
         <input type="text" id="roomCode" class="room-input" value="Estadio1" placeholder="Código de la sala">
         
         <button id="btn-start" class="btn-start">Entrar a la Cancha</button>
         <div class="instructions">
             <p><strong>Camina sobre la pelota</strong> para tener la posesión.</p>
-            <p><span class="hotkey">CLICK IZQ</span> - Patear Pelota (Donde mires)</p>
-            <p><span class="hotkey">W</span> <span class="hotkey">A</span> <span class="hotkey">S</span> <span class="hotkey">D</span> - Moverse | <span class="hotkey">ESPACIO</span> - Saltar</p>
-            <p><strong>Ratón</strong> - Mirar y apuntar</p>
+            <p><span class="hotkey">MANTENER CLICK IZQ</span> - Cargar Tiro y Congelar Movimiento.</p>
+            <p><strong>Mover Ratón al Cargar</strong> - Desplaza el punto para dar <strong style="color: #44ff44;">EFECTO / CURVA</strong>.</p>
+            <p><span class="hotkey">SOLTAR CLICK</span> - Disparar!</p>
         </div>
     </div>
 
-    <div class="crosshair" id="crosshair"></div>
+    <div id="crosshair-container">
+        <div id="crosshair-dot"></div>
+    </div>
+
     <div id="canvas-container"></div>
 
     <script>
@@ -71,12 +80,19 @@
         const mouseSensitivity = 0.002;
         const keys = { w: false, a: false, s: false, d: false, space: false };
 
-        // SOLUCIÓN AL LAG: Control de tiempo de envío
         let lastSendTime = 0;
+
+        // --- VARIABLES DE CARGA Y EFECTO (SPIN) ---
+        let isCharging = false;
+        let chargeStart = 0;
+        let dotOffsetX = 0;
+        let dotOffsetY = 0;
+        const circleRadius = 25; // Radio en píxeles del anillo blanco
 
         const uiLayer = document.getElementById('ui-layer');
         const btnStart = document.getElementById('btn-start');
-        const crosshair = document.getElementById('crosshair');
+        const crosshairContainer = document.getElementById('crosshair-container');
+        const crosshairDot = document.getElementById('crosshair-dot');
 
         init();
         animate();
@@ -104,14 +120,15 @@
             dirLight.castShadow = true;
             dirLight.shadow.mapSize.width = 2048;
             dirLight.shadow.mapSize.height = 2048;
-            dirLight.shadow.camera.left = -30;
-            dirLight.shadow.camera.right = 30;
-            dirLight.shadow.camera.top = 40;
-            dirLight.shadow.camera.bottom = -40;
+            dirLight.shadow.camera.left = -50;
+            dirLight.shadow.camera.right = 50;
+            dirLight.shadow.camera.top = 60;
+            dirLight.shadow.camera.bottom = -60;
             scene.add(dirLight);
 
-            const fieldWidth = 40;
-            const fieldLength = 60;
+            // --- CANCHA PROFESIONAL 70 x 105 ---
+            const fieldWidth = 70;
+            const fieldLength = 105;
 
             const floorMat = new THREE.MeshStandardMaterial({ color: 0x116e25, roughness: 1.0 }); 
             const floor = new THREE.Mesh(new THREE.PlaneGeometry(fieldWidth, fieldLength), floorMat);
@@ -127,19 +144,20 @@
                 scene.add(line);
             }
             
-            crearLinea(fieldWidth, 0.3, 0, 0);
-            const ringGeo = new THREE.RingGeometry(4.7, 5, 32);
+            crearLinea(fieldWidth, 0.3, 0, 0); // Centro
+            const ringGeo = new THREE.RingGeometry(8, 8.3, 32); // Círculo central más grande
             const ring = new THREE.Mesh(ringGeo, lineMat);
             ring.rotation.x = -Math.PI / 2;
             ring.position.y = 0.02;
             scene.add(ring);
             
-            crearLinea(20, 0.3, 0, -22); 
-            crearLinea(0.3, 8, -10, -26); 
-            crearLinea(0.3, 8, 10, -26); 
-            crearLinea(20, 0.3, 0, 22); 
-            crearLinea(0.3, 8, -10, 26); 
-            crearLinea(0.3, 8, 10, 26); 
+            // Áreas adaptadas (16 metros aprox)
+            crearLinea(30, 0.3, 0, -36); 
+            crearLinea(0.3, 16.5, -15, -44.25); 
+            crearLinea(0.3, 16.5, 15, -44.25); 
+            crearLinea(30, 0.3, 0, 36); 
+            crearLinea(0.3, 16.5, -15, 44.25); 
+            crearLinea(0.3, 16.5, 15, 44.25); 
 
             function crearArco(zPos, rotY) {
                 const goalGroup = new THREE.Group();
@@ -167,8 +185,9 @@
                 scene.add(goalGroup);
             }
 
-            crearArco(-28.5, 0); 
-            crearArco(28.5, Math.PI); 
+            // Los arcos ahora están a 52.5 del centro
+            crearArco(-52.5, 0); 
+            crearArco(52.5, Math.PI); 
 
             const wallMat = new THREE.MeshStandardMaterial({ color: 0x334455, roughness: 0.8 });
             const wallGeoX = new THREE.PlaneGeometry(fieldLength, 10);
@@ -274,7 +293,6 @@
                 if (!isJoined) {
                     const roomCode = document.getElementById('roomCode').value;
                     const nickname = document.getElementById('nicknameInput').value || "Jugador";
-                    
                     socket.emit('joinRoom', { roomId: roomCode, nickname: nickname });
                     isJoined = true;
                 }
@@ -284,31 +302,77 @@
             document.addEventListener('pointerlockchange', () => {
                 if (document.pointerLockElement === document.body) {
                     uiLayer.classList.add('hidden');
-                    crosshair.style.display = 'block';
+                    crosshairContainer.style.display = 'block';
                 } else {
                     uiLayer.classList.remove('hidden');
-                    crosshair.style.display = 'none';
+                    crosshairContainer.style.display = 'none';
                     keys.w = keys.a = keys.s = keys.d = keys.space = false;
+                    isCharging = false; // Cancela la carga si se abre el menú
                 }
             });
 
             document.addEventListener('mousemove', (event) => {
                 if (document.pointerLockElement === document.body) {
-                    yaw -= event.movementX * mouseSensitivity;
-                    pitch -= event.movementY * mouseSensitivity;
-                    // Limitamos la cámara para que no puedas dar la vuelta completa por arriba o por abajo
-                    pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 4, pitch));
+                    if (isCharging) {
+                        // BLOQUEO: Movemos el punto de efecto (Spin) en vez de la cámara
+                        dotOffsetX += event.movementX * 0.5;
+                        dotOffsetY += event.movementY * 0.5;
+                        
+                        // Limitamos el punto dentro del anillo (25px de radio)
+                        const dist = Math.sqrt(dotOffsetX*dotOffsetX + dotOffsetY*dotOffsetY);
+                        if (dist > circleRadius) {
+                            dotOffsetX = (dotOffsetX / dist) * circleRadius;
+                            dotOffsetY = (dotOffsetY / dist) * circleRadius;
+                        }
+                    } else {
+                        // Cámara normal
+                        yaw -= event.movementX * mouseSensitivity;
+                        pitch -= event.movementY * mouseSensitivity;
+                        pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 4, pitch));
 
-                    if (players[myId]) {
-                        players[myId].rotation.y = yaw; 
-                        players[myId].userData.cameraPivot.rotation.x = pitch;
+                        if (players[myId]) {
+                            players[myId].rotation.y = yaw; 
+                            players[myId].userData.cameraPivot.rotation.x = pitch;
+                        }
                     }
                 }
             });
 
+            // INICIO DE CARGA
             document.addEventListener('mousedown', (event) => {
                 if (document.pointerLockElement === document.body && event.button === 0) {
-                    socket.emit('attack'); 
+                    const miPelota = targetStates.objects['main_ball'];
+                    // Solo podemos cargar si tenemos la pelota
+                    if (miPelota && miPelota.possessor === myId) {
+                        isCharging = true;
+                        chargeStart = Date.now();
+                        dotOffsetX = 0; 
+                        dotOffsetY = 0;
+                        crosshairDot.style.transform = `translate(-50%, -50%)`;
+                    }
+                }
+            });
+
+            // FIN DE CARGA Y DISPARO
+            document.addEventListener('mouseup', (event) => {
+                if (isCharging && event.button === 0) {
+                    isCharging = false;
+                    
+                    // Calculamos el tiempo (máximo 1.5 segundos para no esperar eternamente)
+                    const chargeTime = Math.min((Date.now() - chargeStart) / 1000, 1.5);
+                    // El poder va de 0.5 (clic rápido) hasta 2.0 (carga máxima)
+                    const power = 0.5 + (chargeTime / 1.5) * 1.5; 
+                    
+                    // El Spin va de -1 a 1 según la posición del punto dentro del círculo de 25px
+                    const spinX = dotOffsetX / circleRadius;
+                    const spinY = dotOffsetY / circleRadius;
+
+                    socket.emit('attack', { yaw, pitch, power, spinX, spinY });
+
+                    // Reseteamos visualmente la mira
+                    crosshairDot.style.backgroundColor = 'white';
+                    crosshairDot.style.transform = `translate(-50%, -50%) scale(1)`;
+                    dotOffsetX = 0; dotOffsetY = 0;
 
                     if (players[myId]) {
                         const mat = players[myId].userData.hitboxMat;
@@ -343,15 +407,27 @@
             requestAnimationFrame(animate);
 
             if (isJoined) {
+                // --- VISUALIZACIÓN DE LA CARGA DE TIRO ---
+                if (isCharging) {
+                    const chargeProgress = Math.min((Date.now() - chargeStart) / 1000, 1.5) / 1.5; // Va de 0 a 1
+                    
+                    // El punto crece y cambia de color a rojo según la carga
+                    crosshairDot.style.backgroundColor = chargeProgress > 0.8 ? '#ff4444' : (chargeProgress > 0.4 ? '#ffff44' : '#ffffff');
+                    crosshairDot.style.transform = `translate(calc(-50% + ${dotOffsetX}px), calc(-50% + ${dotOffsetY}px)) scale(${1 + chargeProgress * 1.5})`;
+                }
+
                 const now = Date.now();
-                // SOLUCIÓN AL LAG: Enviamos la información al servidor solo 30 veces por segundo, no a 144hz.
                 if (now - lastSendTime > 1000 / 30) {
-                    // Ahora se incluye el "pitch" en el envío
-                    socket.emit('input', { keys, yaw, pitch });
+                    // BLOQUEO DE MOVIMIENTO: Si está cargando, el jugador no envía controles W A S D
+                    let teclasActuales = { ...keys };
+                    if (isCharging) {
+                        teclasActuales.w = teclasActuales.a = teclasActuales.s = teclasActuales.d = teclasActuales.space = false;
+                    }
+                    socket.emit('input', { keys: teclasActuales, yaw, pitch });
                     lastSendTime = now;
                 }
                 
-                const lerpFactor = 0.2; // Interpolación más suave
+                const lerpFactor = 0.2; 
 
                 for (let id in targetStates.players) {
                     if (players[id]) {

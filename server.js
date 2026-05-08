@@ -14,7 +14,6 @@ function createRoom(roomId) {
     const bouncyMaterial = new CANNON.Material('bouncy');
     
     world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, slipperyMaterial, { friction: 0.0, restitution: 0.0 }));
-    // Fricción leve para que la pelota no resbale para siempre, pero rebote moderado
     world.addContactMaterial(new CANNON.ContactMaterial(slipperyMaterial, bouncyMaterial, { friction: 0.1, restitution: 0.6 })); 
 
     const groundBody = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane(), material: slipperyMaterial });
@@ -105,7 +104,9 @@ io.on('connection', (socket) => {
         if (ballData.possessor === socket.id) {
             ballData.possessor = null;
             ballData.cooldown = 15; 
-            ballData.curveTimer = 20;
+            
+            // AUMENTADO: 1 segundo entero de efecto de curva en el aire
+            ballData.curveTimer = 30; 
 
             const ballBody = ballData.body;
             ballBody.collisionResponse = true; 
@@ -127,8 +128,8 @@ io.on('connection', (socket) => {
             
             ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
             
-            // Limitamos la rotación inicial
-            const spinFactor = 8 * power; 
+            // AUMENTADO: Le damos mucha más rotación inicial a la pelota
+            const spinFactor = 14 * power; 
             ballBody.angularVelocity.set(spinY * spinFactor, -spinX * spinFactor, 0);
         }
     });
@@ -157,11 +158,9 @@ setInterval(() => {
         const ballData = room.objects['main_ball'];
         const ballBody = ballData.body;
 
-        // --- SISTEMA ANTI-LIGHTSPEED (Límites de Velocidad Física) ---
-        // Esto evita que las colisiones contra el suelo multipliquen la energía de la pelota
         const v = ballBody.velocity;
         const currentSpeed = Math.sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
-        const MAX_SPEED = 75; // Ninguna patada o bug superará este límite
+        const MAX_SPEED = 75; 
         
         if (currentSpeed > MAX_SPEED) {
             v.x = (v.x / currentSpeed) * MAX_SPEED;
@@ -171,7 +170,9 @@ setInterval(() => {
 
         const w = ballBody.angularVelocity;
         const currentSpin = Math.sqrt(w.x*w.x + w.y*w.y + w.z*w.z);
-        const MAX_SPIN = 20; // Previene el "efecto trompo" explosivo
+        
+        // AUMENTADO: Permitimos que la pelota gire más rápido sin activar el freno de seguridad
+        const MAX_SPIN = 30; 
         
         if (currentSpin > MAX_SPIN) {
             w.x = (w.x / currentSpin) * MAX_SPIN;
@@ -179,7 +180,6 @@ setInterval(() => {
             w.z = (w.z / currentSpin) * MAX_SPIN;
         }
 
-        // --- SISTEMA ANTI-SALIDAS ---
         if (Math.abs(ballBody.position.x) > 100 || Math.abs(ballBody.position.z) > 150 || ballBody.position.y > 100 || ballBody.position.y < -5) {
             ballBody.position.set(0, 5, 0);
             ballBody.velocity.set(0, 0, 0);
@@ -188,12 +188,13 @@ setInterval(() => {
             ballData.possessor = null;
         }
 
-        // --- EFECTO MAGNUS (CURVA) ---
+        // --- EFECTO MAGNUS RAMPEADO ---
         if (ballData.curveTimer > 0) {
             ballData.curveTimer--; 
-            const magnusConstant = 0.005; 
             
-            // Calculamos la fuerza de desvío
+            // AUMENTADO: El multiplicador aerodinámico para curvar la trayectoria más duro
+            const magnusConstant = 0.009; 
+            
             const magnusForce = new CANNON.Vec3(
                 (w.y * v.z - w.z * v.y) * magnusConstant,
                 (w.z * v.x - w.x * v.z) * magnusConstant,

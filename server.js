@@ -116,47 +116,34 @@ io.on('connection', (socket) => {
             const spinX = attackData.spinX || 0;    
             const spinY = attackData.spinY || 0;    
 
-            // --- 1. Calcular VECTORES LOCALES basados en tu cámara ---
-            // Vector Frontal
             const dirX = -Math.sin(yaw) * Math.cos(pitch);
             const dirY = Math.sin(pitch);
             const dirZ = -Math.cos(yaw) * Math.cos(pitch);
-            const forwardVector = new CANNON.Vec3(dirX, dirY, dirZ);
 
-            // Vector Derecho (Fijo en el horizonte relativo a ti)
-            const rightX = Math.cos(yaw);
-            const rightY = 0;
-            const rightZ = -Math.sin(yaw);
-            const rightVector = new CANNON.Vec3(rightX, rightY, rightZ);
-
-            // Vector Arriba (Calculado dinámicamente haciendo Right x Forward)
-            const upVector = new CANNON.Vec3();
-            rightVector.cross(forwardVector, upVector);
-
-            // --- 2. Aplicar la Fuerza de Tiro ---
             const baseKickForce = 26; 
             const totalForce = baseKickForce * power;
             const lift = (dirY * totalForce * 0.9) + (3 * power);
             
             ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
             
-            // --- 3. MATEMÁTICA PURA OMNIDIRECCIONAL ---
-            // Definimos hacia dónde quieres que curve la pelota basándonos en tu puntero:
-            // spinX > 0 (derecha) -> curva a la derecha (+rightVector)
-            // spinY < 0 (arriba) -> curva hacia arriba (+upVector)
-            const curveDir = new CANNON.Vec3(
-                rightVector.x * spinX + upVector.x * (-spinY),
-                rightVector.y * spinX + upVector.y * (-spinY),
-                rightVector.z * spinX + upVector.z * (-spinY)
-            );
+            const rightX = Math.cos(yaw);
+            const rightY = 0;
+            const rightZ = -Math.sin(yaw);
 
-            // Calculamos el Eje de Rotación exacto que generará esa curva con Producto Cruz
-            const omegaDir = new CANNON.Vec3();
-            forwardVector.cross(curveDir, omegaDir);
+            const upX = Math.sin(yaw) * Math.sin(pitch);
+            const upY = Math.cos(pitch);
+            const upZ = Math.cos(yaw) * Math.sin(pitch);
 
-            // Aplicamos la rotación
-            const spinFactor = 25 * power; 
-            ballBody.angularVelocity.set(omegaDir.x * spinFactor, omegaDir.y * spinFactor, omegaDir.z * spinFactor);
+            const spinFactor = 16 * power; 
+            
+            const sX = -spinX * spinFactor; 
+            const sY = spinY * spinFactor;
+
+            const angVelX = (sY * rightX) + (sX * upX);
+            const angVelY = (sY * rightY) + (sX * upY);
+            const angVelZ = (sY * rightZ) + (sX * upZ);
+
+            ballBody.angularVelocity.set(angVelX, angVelY, angVelZ);
         }
     });
 
@@ -184,7 +171,6 @@ setInterval(() => {
         const ballData = room.objects['main_ball'];
         const ballBody = ballData.body;
 
-        // Limitar excesos de física para evitar desincronizaciones de red
         const v = ballBody.velocity;
         const currentSpeed = Math.sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
         const MAX_SPEED = 85; 
@@ -197,7 +183,7 @@ setInterval(() => {
 
         const w = ballBody.angularVelocity;
         const currentSpin = Math.sqrt(w.x*w.x + w.y*w.y + w.z*w.z);
-        const MAX_SPIN = 50; // Tolerancia alta para permitir giros espectaculares
+        const MAX_SPIN = 50; 
         
         if (currentSpin > MAX_SPIN) {
             w.x = (w.x / currentSpin) * MAX_SPIN;
@@ -213,10 +199,8 @@ setInterval(() => {
             ballData.possessor = null;
         }
 
-        // --- EFECTO MAGNUS AERODINÁMICO ---
         if (ballData.curveTimer > 0) {
             ballData.curveTimer--; 
-            
             const powerRatio = ballData.curveTimer / ballData.curveMaxTime;
             const magnusConstant = 0.008 * powerRatio; 
             
@@ -230,14 +214,20 @@ setInterval(() => {
 
         if (ballData.cooldown > 0) ballData.cooldown--;
 
+        // --- SOLUCIÓN: HITBOX 3D REAL ---
         if (!ballData.possessor && ballData.cooldown <= 0) {
-            const grabRadius = 3.0; 
+            const grabRadius = 2.5; // Ajustado para ser preciso
             for (const id in room.players) {
                 const playerBody = room.players[id];
+                
+                // Calculamos X, Y y Z (Distancia 3D pura)
                 const dx = ballBody.position.x - playerBody.position.x;
+                const dy = ballBody.position.y - playerBody.position.y;
                 const dz = ballBody.position.z - playerBody.position.z;
                 
-                if (Math.sqrt(dx*dx + dz*dz) <= grabRadius) {
+                const distance3D = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                
+                if (distance3D <= grabRadius) {
                     ballData.possessor = id;
                     ballBody.collisionResponse = false; 
                     break; 

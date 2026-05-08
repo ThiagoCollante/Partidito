@@ -20,8 +20,9 @@ function createRoom(roomId) {
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(groundBody);
 
-    const fieldWidth = 40;
-    const fieldLength = 60;
+    // --- NUEVAS DIMENSIONES: CANCHA DE 70 x 105 ---
+    const fieldWidth = 70;
+    const fieldLength = 105;
     const wallThickness = 4; 
     const wallHeight = 20;
 
@@ -37,11 +38,13 @@ function createRoom(roomId) {
 
     world.addBody(wallN); world.addBody(wallS); world.addBody(wallE); world.addBody(wallW); world.addBody(roof);
 
+    // Físicas de los Arcos adaptadas a la nueva distancia
+    const goalZ = 51; // Acomodado al borde de la cancha (-52.5)
     const goalSideShape = new CANNON.Box(new CANNON.Vec3(0.2, 1.5, 1.5));
-    world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(-5.2, 1.5, -28.5), material: bouncyMaterial }));
-    world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(5.2, 1.5, -28.5), material: bouncyMaterial }));
-    world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(-5.2, 1.5, 28.5), material: bouncyMaterial }));
-    world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(5.2, 1.5, 28.5), material: bouncyMaterial }));
+    world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(-5.2, 1.5, -goalZ), material: bouncyMaterial }));
+    world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(5.2, 1.5, -goalZ), material: bouncyMaterial }));
+    world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(-5.2, 1.5, goalZ), material: bouncyMaterial }));
+    world.addBody(new CANNON.Body({ type: CANNON.Body.STATIC, shape: goalSideShape, position: new CANNON.Vec3(5.2, 1.5, goalZ), material: bouncyMaterial }));
 
     const objects = {};
 
@@ -50,8 +53,8 @@ function createRoom(roomId) {
         shape: new CANNON.Sphere(0.3), 
         position: new CANNON.Vec3(0, 5, 0), 
         material: bouncyMaterial,
-        linearDamping: 0.5,  
-        angularDamping: 0.5  
+        linearDamping: 0.4,  
+        angularDamping: 0.4  
     });
     world.addBody(smallBall); 
     objects[`main_ball`] = { body: smallBall, shape: 'soccer_ball', possessor: null, cooldown: 0 };
@@ -92,8 +95,8 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- NUEVA PATADA CON VECTOR 3D (YAW + PITCH) ---
-    socket.on('attack', () => {
+    // --- NUEVO SISTEMA DE TIRO CON CARGA Y EFECTO (SPIN) ---
+    socket.on('attack', (attackData) => {
         const room = rooms[socket.roomId];
         if (!room || !room.players[socket.id]) return;
 
@@ -104,24 +107,31 @@ io.on('connection', (socket) => {
             ballData.possessor = null;
             ballData.cooldown = 15; 
 
-            const yaw = playerBody.input.yaw;
-            const pitch = playerBody.input.pitch || 0; // Ángulo vertical
+            // Datos que envía el cliente
+            const yaw = attackData.yaw;
+            const pitch = attackData.pitch;
+            const power = attackData.power || 1;    // De 0.5 (tiro rápido) a 2.0 (cargado al máximo)
+            const spinX = attackData.spinX || 0;    // De -1 a 1 (Efecto izquierda/derecha)
+            const spinY = attackData.spinY || 0;    // De -1 a 1 (Topspin/Backspin)
 
-            // Trigonometría esférica
             const dirX = -Math.sin(yaw) * Math.cos(pitch);
             const dirY = Math.sin(pitch);
             const dirZ = -Math.cos(yaw) * Math.cos(pitch);
 
-            const kickForce = 65; 
+            const baseKickForce = 50; 
+            const totalForce = baseKickForce * power;
             
-            // Calculamos la fuerza hacia arriba. Añadimos un mínimo de "4" para que la pelota no se arrastre por el suelo si miras totalmente recto.
-            const lift = (dirY * kickForce) + 4;
+            const lift = (dirY * totalForce) + (5 * power);
 
             const ballBody = ballData.body;
             ballBody.wakeUp(); 
             
-            ballBody.velocity.set(dirX * kickForce, lift, dirZ * kickForce);
-            ballBody.angularVelocity.set((Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * 40);
+            ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
+            
+            // Aplicar la rotación para el Efecto Magnus en el aire
+            // El spinX negativo (punto a la izq) aplica rotación en Y para curvar a la izquierda.
+            const spinFactor = 35 * power;
+            ballBody.angularVelocity.set(spinY * spinFactor, -spinX * spinFactor, 0);
         }
     });
 
@@ -145,6 +155,19 @@ setInterval(() => {
 
         const ballData = room.objects['main_ball'];
         const ballBody = ballData.body;
+
+        // --- EFECTO MAGNUS (CURVA EN EL AIRE) ---
+        // Calcula la fuerza perpendicular a la velocidad y la rotación para curvar la bola.
+        const v = ballBody.velocity;
+        const w = ballBody.angularVelocity;
+        const magnusConstant = 0.025; // Intensidad del efecto en el aire
+        const magnusForce = new CANNON.Vec3(
+            (w.y * v.z - w.z * v.y) * magnusConstant,
+            (w.z * v.x - w.x * v.z) * magnusConstant,
+            (w.x * v.y - w.y * v.x) * magnusConstant
+        );
+        ballBody.applyForce(magnusForce, ballBody.position);
+
 
         if (ballData.cooldown > 0) ballData.cooldown--;
 
@@ -215,20 +238,19 @@ setInterval(() => {
         for (const id in room.players) {
             const body = room.players[id];
             state.players[id] = { 
-                x: body.position.x, 
-                y: body.position.y - 0.5, 
-                z: body.position.z,
-                yaw: body.input.yaw,
-                nickname: body.nickname 
+                x: body.position.x, y: body.position.y - 0.5, z: body.position.z,
+                yaw: body.input.yaw, nickname: body.nickname 
             };
         }
         
         for (const id in room.objects) {
-            const obj = room.objects[id].body;
+            const objData = room.objects[id];
+            const objBody = objData.body;
             state.objects[id] = {
-                shape: room.objects[id].shape,
-                x: obj.position.x, y: obj.position.y, z: obj.position.z,
-                qx: obj.quaternion.x, qy: obj.quaternion.y, qz: obj.quaternion.z, qw: obj.quaternion.w
+                shape: objData.shape,
+                x: objBody.position.x, y: objBody.position.y, z: objBody.position.z,
+                qx: objBody.quaternion.x, qy: objBody.quaternion.y, qz: objBody.quaternion.z, qw: objBody.quaternion.w,
+                possessor: objData.possessor // IMPORTANTÍSIMO: Avisarle a los clientes quién tiene el balón
             };
         }
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rocket League Clone</title>
+    <title>Juego Multiplayer - Fútbol Arena</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; display: block; }
@@ -16,10 +16,10 @@
         #ui-layer.hidden { opacity: 0; pointer-events: none; }
 
         .btn-start {
-            padding: 15px 30px; font-size: 1.2rem; font-weight: bold; color: #fff; background-color: #ff5500;
+            padding: 15px 30px; font-size: 1.2rem; font-weight: bold; color: #fff; background-color: #0078d7;
             border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: 0.2s; margin-top: 15px;
         }
-        .btn-start:hover { background-color: #cc4400; transform: scale(1.05); }
+        .btn-start:hover { background-color: #005a9e; transform: scale(1.05); }
 
         .room-input {
             padding: 12px; font-size: 1.1rem; border-radius: 8px; border: none; outline: none; text-align: center; width: 250px; margin-bottom: 10px;
@@ -27,6 +27,12 @@
 
         .instructions { margin-top: 20px; text-align: center; color: #ccc; line-height: 1.6; }
         .hotkey { background: #333; padding: 2px 6px; border-radius: 4px; border-bottom: 2px solid #111; font-family: monospace; font-weight: bold; color: #00ffaa; }
+
+        .crosshair {
+            position: absolute; top: 50%; left: 50%; width: 6px; height: 6px;
+            background-color: rgba(255, 255, 255, 0.7); border-radius: 50%;
+            transform: translate(-50%, -50%); z-index: 5; pointer-events: none; display: none;
+        }
     </style>
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -34,20 +40,20 @@
 <body>
 
     <div id="ui-layer">
-        <h1 style="margin-bottom: 10px;">Lobby Automovilístico</h1>
+        <h1 style="margin-bottom: 10px;">Lobby Fútbol</h1>
         <input type="text" id="nicknameInput" class="room-input" placeholder="Tu Nombre" maxlength="12">
         <input type="text" id="roomCode" class="room-input" value="Estadio1" placeholder="Código de la sala">
         
-        <button id="btn-start" class="btn-start">ARRANCAR</button>
+        <button id="btn-start" class="btn-start">Entrar a la Cancha</button>
         <div class="instructions">
-            <p><span class="hotkey">W</span> / <span class="hotkey">S</span> - Acelerar / Reversa</p>
-            <p><span class="hotkey">A</span> / <span class="hotkey">D</span> - Girar el volante</p>
-            <p><span class="hotkey">SHIFT</span> - NITRO MÁXIMO</p>
-            <p><span class="hotkey">ESPACIO</span> - Saltar</p>
-            <p><strong>Ratón</strong> - Girar la Cámara (Independiente)</p>
+            <p><strong>Camina sobre la pelota</strong> para tener la posesión.</p>
+            <p><span class="hotkey">CLICK IZQ</span> - Patear Pelota (Si la tienes)</p>
+            <p><span class="hotkey">W</span> <span class="hotkey">A</span> <span class="hotkey">S</span> <span class="hotkey">D</span> - Moverse | <span class="hotkey">ESPACIO</span> - Saltar</p>
+            <p><strong>Ratón</strong> - Mirar y apuntar</p>
         </div>
     </div>
 
+    <div class="crosshair" id="crosshair"></div>
     <div id="canvas-container"></div>
 
     <script>
@@ -63,10 +69,11 @@
 
         let yaw = 0; let pitch = 0;
         const mouseSensitivity = 0.002;
-        const keys = { w: false, a: false, s: false, d: false, space: false, shift: false };
+        const keys = { w: false, a: false, s: false, d: false, space: false };
 
         const uiLayer = document.getElementById('ui-layer');
         const btnStart = document.getElementById('btn-start');
+        const crosshair = document.getElementById('crosshair');
 
         init();
         animate();
@@ -84,11 +91,8 @@
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
             container.appendChild(renderer.domElement);
 
-            // --- ILUMINACIÓN INTERNA DEL ESTADIO ---
-            // Como hay techo, la luz ambiental debe ser fuerte
             scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
-            // Foco central del estadio apuntando hacia abajo
             const spotLight = new THREE.SpotLight(0xffffff, 1.5);
             spotLight.position.set(0, 38, 0);
             spotLight.angle = Math.PI / 3;
@@ -98,7 +102,6 @@
             spotLight.shadow.mapSize.height = 2048;
             scene.add(spotLight);
 
-            // --- CONSTRUCCIÓN VISUAL DEL ESTADIO GIGANTE (150x150) ---
             const roomSize = 150;
             const wallHeight = 40;
 
@@ -106,14 +109,12 @@
             gridHelper.position.y = 0.02;
             scene.add(gridHelper);
 
-            // Suelo (Gris oscuro asfalto)
             const floorMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
             const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize, roomSize), floorMat);
             floor.rotation.x = -Math.PI / 2;
             floor.receiveShadow = true;
             scene.add(floor);
 
-            // Paredes
             const wallMat = new THREE.MeshStandardMaterial({ color: 0x223344, roughness: 0.8 });
             const wallGeoX = new THREE.PlaneGeometry(roomSize, wallHeight);
             
@@ -122,7 +123,6 @@
             const wallE = new THREE.Mesh(wallGeoX, wallMat); wallE.position.set(roomSize/2, wallHeight/2, 0); wallE.rotation.y = -Math.PI / 2; wallE.receiveShadow = true; scene.add(wallE);
             const wallW = new THREE.Mesh(wallGeoX, wallMat); wallW.position.set(-roomSize/2, wallHeight/2, 0); wallW.rotation.y = Math.PI / 2; wallW.receiveShadow = true; scene.add(wallW);
 
-            // Techo
             const roofMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 1.0 });
             const roof = new THREE.Mesh(new THREE.PlaneGeometry(roomSize, roomSize), roofMat);
             roof.position.set(0, wallHeight, 0);
@@ -145,56 +145,65 @@
             const texture = new THREE.CanvasTexture(canvas);
             const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false }); 
             const sprite = new THREE.Sprite(spriteMaterial);
-            sprite.scale.set(4, 2, 1);
-            sprite.position.y = 3.5; // Más alto por el coche
+            sprite.scale.set(3, 1.5, 1);
+            sprite.position.y = 2.6; 
             return sprite;
         }
 
-        function crearCoche(id, nickname) {
-            const carGroup = new THREE.Group();
+        function crearPersonaje(id, nickname) {
+            const character = new THREE.Group();
+            
             const isMe = (id === myId);
-            const colorBody = isMe ? 0x0088ff : 0xff2222; 
+            const colorBody = isMe ? 0x0078d7 : 0xff3333; 
 
-            // Chasis inferior (Box de 2 ancho x 0.5 alto x 4 largo)
-            const chassisGeo = new THREE.BoxGeometry(2, 0.5, 4);
-            const chassisMat = new THREE.MeshStandardMaterial({ color: colorBody, roughness: 0.3, metalness: 0.7 });
-            const chassis = new THREE.Mesh(chassisGeo, chassisMat);
-            chassis.castShadow = true;
-            carGroup.add(chassis);
+            const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 2, 16); 
+            const bodyMat = new THREE.MeshStandardMaterial({ color: colorBody, roughness: 0.4 });
+            const characterBody = new THREE.Mesh(bodyGeo, bodyMat);
+            characterBody.position.y = 1; 
+            characterBody.castShadow = true;
+            character.add(characterBody);
 
-            // Cabina superior
-            const cabinGeo = new THREE.BoxGeometry(1.6, 0.6, 2);
-            const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1 }); // Cristales negros
-            const cabin = new THREE.Mesh(cabinGeo, cabinMat);
-            cabin.position.set(0, 0.55, -0.5); // Tirado un poco hacia atrás
-            cabin.castShadow = true;
-            carGroup.add(cabin);
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.4, 0.6), new THREE.MeshStandardMaterial({ color: 0xeeeeee }));
+            head.position.set(0, 0.7, -0.2); 
+            characterBody.add(head);
 
-            // Ruedas
-            const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
-            const wheelMat = new THREE.MeshStandardMaterial({ color: 0x050505 });
-            const wPositions = [
-                [1.1, -0.1, 1.2], [-1.1, -0.1, 1.2], // Traseras
-                [1.1, -0.1, -1.2], [-1.1, -0.1, -1.2] // Delanteras
-            ];
-            wPositions.forEach(pos => {
-                const wheel = new THREE.Mesh(wheelGeo, wheelMat);
-                wheel.rotation.z = Math.PI / 2;
-                wheel.position.set(pos[0], pos[1], pos[2]);
-                carGroup.add(wheel);
-            });
+            const pack = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.3), new THREE.MeshStandardMaterial({ color: 0x004488 }));
+            pack.position.set(0, 0.1, 0.4);
+            characterBody.add(pack);
 
-            // Nombre
-            const nombreMostrar = nickname || "Piloto";
+            const nombreMostrar = nickname || "Anónimo";
             const cartelNombre = crearTextoSala(nombreMostrar);
-            carGroup.add(cartelNombre); 
+            character.add(cartelNombre); 
+
+            // Hitbox visual (Área de agarre)
+            const hitboxGeo = new THREE.CylinderGeometry(1.5, 1.5, 3, 16);
+            const hitboxMat = new THREE.MeshBasicMaterial({ 
+                color: 0xff4444, 
+                transparent: true, 
+                opacity: 0.8, 
+                depthWrite: false,
+                wireframe: true 
+            });
+            const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
+            hitbox.position.set(0, 1, 0); 
+            character.add(hitbox);
+            
+            character.userData.hitboxMat = hitboxMat;
 
             if (isMe) {
-                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+                const cameraPivot = new THREE.Object3D();
+                cameraPivot.position.y = 1.5; 
+                character.add(cameraPivot);
+
+                camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
+                camera.position.set(0.8, 0.3, 2.5); 
+                cameraPivot.add(camera);
+
+                character.userData.cameraPivot = cameraPivot; 
             }
 
-            scene.add(carGroup);
-            return carGroup;
+            scene.add(character);
+            return character;
         }
 
         socket.on('gameState', (state) => {
@@ -202,15 +211,14 @@
             targetStates.objects = state.objects;
 
             for (let id in state.players) {
-                if (!players[id]) players[id] = crearCoche(id, state.players[id].nickname);
+                if (!players[id]) players[id] = crearPersonaje(id, state.players[id].nickname);
             }
 
             for (let id in state.objects) {
                 if (!meshes[id]) {
-                    if (state.objects[id].shape === 'main_ball') {
-                        const objMat = new THREE.MeshStandardMaterial({ color: 0x00ff88, roughness: 0.4, metalness: 0.2 }); 
-                        // Radio 1.5 en el cliente también
-                        const mesh = new THREE.Mesh(new THREE.SphereGeometry(1.5, 32, 32), objMat); 
+                    if (state.objects[id].shape === 'tiny_sphere') {
+                        const objMat = new THREE.MeshStandardMaterial({ color: 0x00ffaa, roughness: 0.2, metalness: 0.5 }); 
+                        const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.3, 32, 32), objMat); 
                         mesh.castShadow = true; mesh.receiveShadow = true;
                         scene.add(mesh);
                         meshes[id] = mesh;
@@ -227,7 +235,8 @@
             btnStart.addEventListener('click', () => {
                 if (!isJoined) {
                     const roomCode = document.getElementById('roomCode').value;
-                    const nickname = document.getElementById('nicknameInput').value || "Piloto";
+                    const nickname = document.getElementById('nicknameInput').value || "Invitado";
+                    
                     socket.emit('joinRoom', { roomId: roomCode, nickname: nickname });
                     isJoined = true;
                 }
@@ -237,30 +246,47 @@
             document.addEventListener('pointerlockchange', () => {
                 if (document.pointerLockElement === document.body) {
                     uiLayer.classList.add('hidden');
+                    crosshair.style.display = 'block';
                 } else {
                     uiLayer.classList.remove('hidden');
-                    keys.w = keys.a = keys.s = keys.d = keys.space = keys.shift = false;
+                    crosshair.style.display = 'none';
+                    keys.w = keys.a = keys.s = keys.d = keys.space = false;
                 }
             });
 
             document.addEventListener('mousemove', (event) => {
                 if (document.pointerLockElement === document.body) {
-                    // El ratón SOLO controla la cámara ahora. El auto gira con A y D.
                     yaw -= event.movementX * mouseSensitivity;
                     pitch -= event.movementY * mouseSensitivity;
-                    pitch = Math.max(-Math.PI / 4, Math.min(Math.PI / 2.5, pitch));
+                    pitch = Math.max(-Math.PI / 3, Math.min(Math.PI / 4, pitch));
+
+                    if (players[myId]) {
+                        players[myId].rotation.y = yaw; 
+                        players[myId].userData.cameraPivot.rotation.x = pitch;
+                    }
+                }
+            });
+
+            document.addEventListener('mousedown', (event) => {
+                if (document.pointerLockElement === document.body && event.button === 0) {
+                    socket.emit('attack'); // Intentar patear
+
+                    // Efecto de destello en la Hitbox
+                    if (players[myId]) {
+                        const mat = players[myId].userData.hitboxMat;
+                        mat.color.setHex(0xffffff); 
+                        setTimeout(() => { mat.color.setHex(0xff4444); }, 100); 
+                    }
                 }
             });
 
             window.addEventListener('keydown', (e) => { 
                 if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; 
                 if(e.code === 'Space') keys.space = true;
-                if(e.code === 'ShiftLeft' || e.code === 'ShiftRight') keys.shift = true;
             });
             window.addEventListener('keyup', (e) => { 
                 if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; 
                 if(e.code === 'Space') keys.space = false;
-                if(e.code === 'ShiftLeft' || e.code === 'ShiftRight') keys.shift = false;
             });
         }
 
@@ -279,25 +305,23 @@
             requestAnimationFrame(animate);
 
             if (isJoined) {
-                // Enviamos los controles al servidor (Incluyendo Shift para el Nitro)
-                socket.emit('input', { keys });
-                
+                socket.emit('input', { keys, yaw });
                 const lerpFactor = 0.3;
 
-                // Actualizar Coches
                 for (let id in targetStates.players) {
                     if (players[id]) {
                         const target = targetStates.players[id];
                         tempVec.set(target.x, target.y, target.z);
                         players[id].position.lerp(tempVec, lerpFactor);
 
-                        // Como ahora el servidor manda el Quaternion del coche, lo interpolamos completo
-                        tempQuat.set(target.qx, target.qy, target.qz, target.qw);
-                        players[id].quaternion.slerp(tempQuat, lerpFactor);
+                        if (id !== myId) {
+                            const euler = new THREE.Euler(0, target.yaw, 0);
+                            tempQuat.setFromEuler(euler);
+                            players[id].quaternion.slerp(tempQuat, lerpFactor);
+                        }
                     }
                 }
 
-                // Actualizar Pelota
                 for (let id in targetStates.objects) {
                     if (meshes[id]) {
                         const target = targetStates.objects[id];
@@ -306,19 +330,6 @@
                         tempQuat.set(target.qx, target.qy, target.qz, target.qw);
                         meshes[id].quaternion.slerp(tempQuat, lerpFactor);
                     }
-                }
-
-                // --- CÁMARA ORBITAL DESVINCULADA ---
-                if (camera && players[myId]) {
-                    const carPos = players[myId].position;
-                    
-                    // La cámara se posiciona esféricamente usando el yaw/pitch del ratón
-                    const cameraDistance = 10;
-                    const offset = new THREE.Vector3(0, 0, cameraDistance);
-                    offset.applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
-                    
-                    camera.position.lerp(carPos.clone().add(offset), 0.2); // Suavizar seguimiento de cámara
-                    camera.lookAt(carPos.clone().add(new THREE.Vector3(0, 1, 0))); // Mirar un poco por encima del techo del coche
                 }
             }
 

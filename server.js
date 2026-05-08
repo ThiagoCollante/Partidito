@@ -51,8 +51,8 @@ function createRoom(roomId) {
         shape: new CANNON.Sphere(0.3), 
         position: new CANNON.Vec3(0, 5, 0), 
         material: bouncyMaterial,
-        linearDamping: 0.4,  
-        angularDamping: 0.4  
+        linearDamping: 0.3,  // Fricción de aire normal
+        angularDamping: 0.1  // MUCHO MENOR: Permite que el giro (efecto) dure más tiempo vivo
     });
     world.addBody(smallBall); 
     
@@ -104,9 +104,7 @@ io.on('connection', (socket) => {
         if (ballData.possessor === socket.id) {
             ballData.possessor = null;
             ballData.cooldown = 15; 
-            
-            // AUMENTADO: 1 segundo entero de efecto de curva en el aire
-            ballData.curveTimer = 30; 
+            ballData.curveTimer = 30; // 1 segundo de Efecto Magnus constante
 
             const ballBody = ballData.body;
             ballBody.collisionResponse = true; 
@@ -118,6 +116,7 @@ io.on('connection', (socket) => {
             const spinX = attackData.spinX || 0;    
             const spinY = attackData.spinY || 0;    
 
+            // 1. Vector Frontal (Hacia donde miras)
             const dirX = -Math.sin(yaw) * Math.cos(pitch);
             const dirY = Math.sin(pitch);
             const dirZ = -Math.cos(yaw) * Math.cos(pitch);
@@ -128,9 +127,22 @@ io.on('connection', (socket) => {
             
             ballBody.velocity.set(dirX * totalForce, lift, dirZ * totalForce);
             
-            // AUMENTADO: Le damos mucha más rotación inicial a la pelota
+            // 2. ¡EL ARREGLO OMNIDIRECCIONAL! 
+            // Calculamos el Eje Derecho (Local X) relativo al jugador para el Topspin/Backspin
+            const rightX = Math.cos(yaw);
+            const rightZ = -Math.sin(yaw);
+
             const spinFactor = 14 * power; 
-            ballBody.angularVelocity.set(spinY * spinFactor, -spinX * spinFactor, 0);
+            
+            // spinX (Mover ratón a los lados) -> Gira sobre el eje Y Global (Curva Izquierda/Derecha real)
+            const angVelY = -spinX * spinFactor; 
+            
+            // spinY (Mover ratón arriba/abajo) -> Gira sobre el eje Derecho Local (Topspin/Backspin real)
+            const angVelX = spinY * rightX * spinFactor;
+            const angVelZ = spinY * rightZ * spinFactor;
+
+            // Ahora sí, vectores combinados perfectos sin importar a dónde mires
+            ballBody.angularVelocity.set(angVelX, angVelY, angVelZ);
         }
     });
 
@@ -170,8 +182,6 @@ setInterval(() => {
 
         const w = ballBody.angularVelocity;
         const currentSpin = Math.sqrt(w.x*w.x + w.y*w.y + w.z*w.z);
-        
-        // AUMENTADO: Permitimos que la pelota gire más rápido sin activar el freno de seguridad
         const MAX_SPIN = 30; 
         
         if (currentSpin > MAX_SPIN) {
@@ -188,12 +198,12 @@ setInterval(() => {
             ballData.possessor = null;
         }
 
-        // --- EFECTO MAGNUS RAMPEADO ---
+        // --- EFECTO MAGNUS OMNIDIRECCIONAL ---
         if (ballData.curveTimer > 0) {
             ballData.curveTimer--; 
             
-            // AUMENTADO: El multiplicador aerodinámico para curvar la trayectoria más duro
-            const magnusConstant = 0.009; 
+            // Constante ligeramente más alta para asegurar que veas bien la curva
+            const magnusConstant = 0.012; 
             
             const magnusForce = new CANNON.Vec3(
                 (w.y * v.z - w.z * v.y) * magnusConstant,

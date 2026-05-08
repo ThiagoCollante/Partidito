@@ -82,8 +82,8 @@
             const container = document.getElementById('canvas-container');
 
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x050505);
-            scene.fog = new THREE.Fog(0x050505, 50, 150);
+            scene.background = new THREE.Color(0x1a1a1a); // Fondo más claro para evitar bordes súper negros
+            scene.fog = new THREE.Fog(0x1a1a1a, 60, 200); // Niebla más lejana y menos densa
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -91,11 +91,19 @@
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
             container.appendChild(renderer.domElement);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            // --- NUEVA ILUMINACIÓN (Más brillante y pareja) ---
+            // 1. Luz Ambiental fuerte
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8)); 
 
-            const spotLight = new THREE.SpotLight(0xffffff, 1.5);
-            spotLight.position.set(0, 38, 0);
-            spotLight.angle = Math.PI / 3;
+            // 2. Luz Hemisférica (simula rebote de luz del cielo/estadio)
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+            hemiLight.position.set(0, 50, 0);
+            scene.add(hemiLight);
+
+            // 3. Foco principal de sombras
+            const spotLight = new THREE.SpotLight(0xffffff, 1.8);
+            spotLight.position.set(0, 50, 0);
+            spotLight.angle = Math.PI / 2.5; // Ángulo más ancho para cubrir más cancha
             spotLight.penumbra = 0.5;
             spotLight.castShadow = true;
             spotLight.shadow.mapSize.width = 2048;
@@ -105,17 +113,18 @@
             const roomSize = 150;
             const wallHeight = 40;
 
-            const gridHelper = new THREE.GridHelper(roomSize, 50, 0x00ffaa, 0x222222);
+            const gridHelper = new THREE.GridHelper(roomSize, 50, 0x00ffaa, 0x333333);
             gridHelper.position.y = 0.02;
             scene.add(gridHelper);
 
-            const floorMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+            // Suelo más claro
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.9 });
             const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize, roomSize), floorMat);
             floor.rotation.x = -Math.PI / 2;
             floor.receiveShadow = true;
             scene.add(floor);
 
-            const wallMat = new THREE.MeshStandardMaterial({ color: 0x223344, roughness: 0.8 });
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x334455, roughness: 0.8 }); // Paredes más brillantes
             const wallGeoX = new THREE.PlaneGeometry(roomSize, wallHeight);
             
             const wallN = new THREE.Mesh(wallGeoX, wallMat); wallN.position.set(0, wallHeight/2, -roomSize/2); wallN.receiveShadow = true; scene.add(wallN);
@@ -123,7 +132,7 @@
             const wallE = new THREE.Mesh(wallGeoX, wallMat); wallE.position.set(roomSize/2, wallHeight/2, 0); wallE.rotation.y = -Math.PI / 2; wallE.receiveShadow = true; scene.add(wallE);
             const wallW = new THREE.Mesh(wallGeoX, wallMat); wallW.position.set(-roomSize/2, wallHeight/2, 0); wallW.rotation.y = Math.PI / 2; wallW.receiveShadow = true; scene.add(wallW);
 
-            const roofMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 1.0 });
+            const roofMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 1.0 });
             const roof = new THREE.Mesh(new THREE.PlaneGeometry(roomSize, roomSize), roofMat);
             roof.position.set(0, wallHeight, 0);
             roof.rotation.x = Math.PI / 2;
@@ -175,7 +184,7 @@
             const cartelNombre = crearTextoSala(nombreMostrar);
             character.add(cartelNombre); 
 
-            // Hitbox visual (Área de agarre)
+            // Hitbox visual
             const hitboxGeo = new THREE.CylinderGeometry(1.5, 1.5, 3, 16);
             const hitboxMat = new THREE.MeshBasicMaterial({ 
                 color: 0xff4444, 
@@ -195,8 +204,11 @@
                 cameraPivot.position.y = 1.5; 
                 character.add(cameraPivot);
 
-                camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
-                camera.position.set(0.8, 0.3, 2.5); 
+                // --- NUEVO FOV (90) Y POSICIÓN ---
+                // Se sube a 90 el FOV para una vista periférica excelente estilo e-sports.
+                // Se aleja a Z=3.0 y se sube a Y=0.5 para poder ver mejor los pies y la pelota.
+                camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 500);
+                camera.position.set(0.8, 0.5, 3.0); 
                 cameraPivot.add(camera);
 
                 character.userData.cameraPivot = cameraPivot; 
@@ -269,9 +281,8 @@
 
             document.addEventListener('mousedown', (event) => {
                 if (document.pointerLockElement === document.body && event.button === 0) {
-                    socket.emit('attack'); // Intentar patear
+                    socket.emit('attack'); 
 
-                    // Efecto de destello en la Hitbox
                     if (players[myId]) {
                         const mat = players[myId].userData.hitboxMat;
                         mat.color.setHex(0xffffff); 
